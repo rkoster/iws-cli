@@ -337,6 +337,24 @@ func (c *Client) LaunchSystemContainer(imageRef, instanceName, pool string) erro
 		return fmt.Errorf("failed to init container: %w: %s", err, string(output))
 	}
 
+	// Clear OCI metadata so Incus treats this as a system container (boots with /sbin/init)
+	// rather than an app container (runs OCI entrypoint as PID 1)
+	ociKeys := []string{
+		"oci.entrypoint",
+		"oci.cmd",
+		"oci.cwd",
+		"oci.uid",
+		"oci.gid",
+		"volatile.container.oci",
+	}
+	for _, key := range ociKeys {
+		unsetCmd := exec.Command("incus", "config", "unset", instanceName, key)
+		if c.Config.ConfigDir != "" {
+			unsetCmd.Env = append(os.Environ(), "INCUS_DIR="+c.Config.ConfigDir)
+		}
+		unsetCmd.Run() // Ignore errors — key may not exist
+	}
+
 	// Add disk devices for persistent volumes
 	devices := []struct {
 		name, pool, source, path string
