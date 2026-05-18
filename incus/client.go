@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"time"
 
 	incusclient "github.com/lxc/incus/v7/client"
 	"github.com/lxc/incus/v7/shared/api"
@@ -463,6 +464,38 @@ func (c *Client) LaunchSystemContainer(imageRef, instanceName, pool string) erro
 	}
 
 	return nil
+}
+
+// WaitForSystemdReady waits for systemd to be fully booted in the container.
+// Returns when systemctl is-system-running returns "running" or "degraded".
+// Times out after maxAttempts * pollInterval duration.
+func (c *Client) WaitForSystemdReady(instanceName string, maxAttempts int, pollInterval time.Duration) error {
+	fmt.Println("Waiting for systemd to be ready...")
+
+	for i := 0; i < maxAttempts; i++ {
+		cmd := exec.Command("incus", "exec", instanceName, "--", "systemctl", "is-system-running")
+
+		if c.Config.ConfigDir != "" {
+			cmd.Env = append(os.Environ(), "INCUS_DIR="+c.Config.ConfigDir)
+		}
+
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			// systemctl may exit with non-zero if still booting
+			time.Sleep(pollInterval)
+			continue
+		}
+
+		status := strings.TrimSpace(string(output))
+		if status == "running" || status == "degraded" {
+			fmt.Printf("Systemd is %s\n", status)
+			return nil
+		}
+
+		time.Sleep(pollInterval)
+	}
+
+	return fmt.Errorf("timed out waiting for systemd to be ready")
 }
 
 func (c *Client) parseImageRef(ref string) api.InstanceSource {
