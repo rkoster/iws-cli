@@ -82,7 +82,7 @@ func Execute() error {
 
 		// Launch instance (volumes are attached during creation)
 		pool := "local"
-		if err := client.LaunchInstance(launchImage, cfg.InstanceName, pool, ""); err != nil {
+		if err := client.LaunchSystemContainer(launchImage, cfg.InstanceName, pool); err != nil {
 			return fmt.Errorf("failed to launch instance: %w", err)
 		}
 
@@ -119,7 +119,7 @@ func Execute() error {
 			}
 
 			pool := "local"
-			if err := client.LaunchInstance(launchImage, cfg.InstanceName, pool, ""); err != nil {
+			if err := client.LaunchSystemContainer(launchImage, cfg.InstanceName, pool); err != nil {
 				return fmt.Errorf("failed to launch instance: %w", err)
 			}
 
