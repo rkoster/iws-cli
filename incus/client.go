@@ -359,7 +359,9 @@ func (c *Client) WaitForSystemdReady(instanceName string, maxAttempts int, pollI
 
 		output, err := cmd.CombinedOutput()
 		if err != nil {
-			// systemctl may exit with non-zero if still booting
+			if i%10 == 0 || i == maxAttempts-1 {
+				fmt.Printf("Waiting for systemd... (attempt %d/%d)\n", i+1, maxAttempts)
+			}
 			time.Sleep(pollInterval)
 			continue
 		}

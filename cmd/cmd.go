@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"runtime"
@@ -71,7 +70,10 @@ func Execute() error {
 
 		launchImage := resolveImage(client, cfg.Image, cfg.ServerRemote, cfg.ServerPrefix)
 
-		pool := "local"
+		pool, err := client.DetectStoragePool()
+		if err != nil {
+			return fmt.Errorf("failed to detect storage pool: %w", err)
+		}
 		if err := client.LaunchSystemContainer(launchImage, cfg.InstanceName, pool); err != nil {
 			return fmt.Errorf("failed to launch container: %w", err)
 		}
@@ -146,9 +148,4 @@ Examples:
 `)
 }
 
-// ExecCommandInInstance executes a command in the instance and returns the output
-func ExecCommandInInstance(client *incus.Client, instanceName, remote string, command []string) (string, error) {
-	var stdout bytes.Buffer
-	err := client.ExecCommand(instanceName, command, nil, &stdout, nil)
-	return stdout.String(), err
-}
+
