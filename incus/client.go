@@ -314,31 +314,61 @@ func (c *Client) LaunchSystemContainer(imageRef, instanceName, pool string) erro
 		return err
 	}
 
-	// Build incus launch command
-	args := []string{
-		"launch",
+	// Use incus init + device add + start (incus launch -d only overrides profile devices)
+	initArgs := []string{
+		"init",
 		imageRef,
 		instanceName,
 		"-c", "security.nesting=true",
-		"-d", fmt.Sprintf("config,type=disk,pool=%s,source=workspace-config,path=/home/ruben/.config-volume", pool),
-		"-d", fmt.Sprintf("workspace,type=disk,pool=%s,source=workspace,path=/home/ruben/workspace", pool),
 		"-n", "incusbr0",
 	}
 
 	if pool != "local" {
-		args = append(args, "-s", pool)
+		initArgs = append(initArgs, "-s", pool)
 	}
 
-	cmd := exec.Command("incus", args...)
-
-	// Set up environment to use the Incus config
+	cmd := exec.Command("incus", initArgs...)
 	if c.Config.ConfigDir != "" {
 		cmd.Env = append(os.Environ(), "INCUS_DIR="+c.Config.ConfigDir)
 	}
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("failed to launch container: %w: %s", err, string(output))
+		return fmt.Errorf("failed to init container: %w: %s", err, string(output))
+	}
+
+	// Add disk devices for persistent volumes
+	devices := []struct {
+		name, pool, source, path string
+	}{
+		{"config", pool, "workspace-config", "/home/ruben/.config-volume"},
+		{"workspace", pool, "workspace", "/home/ruben/workspace"},
+	}
+
+	for _, dev := range devices {
+		addCmd := exec.Command("incus", "config", "device", "add", instanceName,
+			dev.name, "disk",
+			"pool="+dev.pool,
+			"source="+dev.source,
+			"path="+dev.path,
+		)
+		if c.Config.ConfigDir != "" {
+			addCmd.Env = append(os.Environ(), "INCUS_DIR="+c.Config.ConfigDir)
+		}
+		output, err = addCmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("failed to add device %s: %w: %s", dev.name, err, string(output))
+		}
+	}
+
+	// Start the container
+	startCmd := exec.Command("incus", "start", instanceName)
+	if c.Config.ConfigDir != "" {
+		startCmd.Env = append(os.Environ(), "INCUS_DIR="+c.Config.ConfigDir)
+	}
+	output, err = startCmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to start container: %w: %s", err, string(output))
 	}
 
 	return nil
