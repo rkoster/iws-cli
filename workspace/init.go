@@ -1,11 +1,9 @@
 package workspace
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 	"os/exec"
-	"time"
 
 	"github.com/lxc/incus/v7/shared/api"
 	"github.com/ruben-koster/iws-cli/incus"
@@ -15,123 +13,6 @@ import (
 type Config struct {
 	InstanceName string
 	Remote       string
-}
-
-// InitConfig initializes the config volume with symlinks
-func (w *Config) InitConfig(client *incus.Client, instanceName, remote string) error {
-	// The client is already connected to the correct server, so we don't need the server prefix
-	targetInstance := instanceName
-
-	// Wait for the instance to be running
-	for i := 0; i < 30; i++ {
-		running, err := client.IsInstanceRunning(targetInstance)
-		if err != nil {
-			return fmt.Errorf("failed to check instance status: %w", err)
-		}
-		if running {
-			break
-		}
-		fmt.Printf("Waiting for instance to be running... (attempt %d)\n", i+1)
-		time.Sleep(2 * time.Second)
-	}
-
-	// Verify instance is running
-	isRunning, err := client.IsInstanceRunning(targetInstance)
-	if err != nil {
-		return fmt.Errorf("failed to check instance status: %w", err)
-	}
-	if !isRunning {
-		return fmt.Errorf("instance '%s' is not running", instanceName)
-	}
-
-	command := `
-		for script in /etc/profile.d/*.sh; do
-			[ -f "$script" ] && . "$script"
-		done
-
-		init_symlink() {
-			target="$1"
-			link="$2"
-			[ -d "$target" ] || mkdir -p "$target"
-
-			if [ -L "$link" ]; then
-				if [ "$(readlink "$link")" != "$target" ]; then
-					rm -f "$link" || true
-					ln -s "$target" "$link" || true
-				fi
-			else
-				if [ -e "$link" ]; then
-					mv "$link" "$target" 2>/dev/null || true
-				fi
-				mkdir -p "$(dirname "$link")" || true
-				ln -s "$target" "$link" || true
-			fi
-		}
-
-		init_config_symlinks() {
-			names="gh gh-copilot github-copilot incus"
-			mkdir -p /home/ruben/.config || true
-			for name in $names; do
-				init_symlink /home/ruben/.config-volume/$name /home/ruben/.config/$name
-			done
-		}
-
-		init_state_symlinks() {
-			init_symlink /home/ruben/.config-volume/opencode-data /home/ruben/.local/share/opencode
-			init_symlink /home/ruben/.config-volume/opencode-state /home/ruben/.local/state/opencode
-			init_symlink /home/ruben/.config-volume/gh-state /home/ruben/.local/state/gh
-
-			target=/home/ruben/.config-volume/zsh_history
-			link=/home/ruben/.zsh_history
-			[ -f "$target" ] || touch "$target"
-			if [ -L "$link" ]; then
-				if [ "$(readlink "$link")" != "$target" ]; then
-					rm -f "$link" || true
-					ln -s "$target" "$link" || true
-				fi
-			else
-				if [ -f "$link" ]; then
-					cat "$link" >> "$target" 2>/dev/null || true
-					rm -f "$link" || true
-				fi
-				ln -s "$target" "$link" || true
-			fi
-		}
-
-		init_config_symlinks
-		init_state_symlinks
-		mkdir -p /home/ruben/workspace || true
-		chown -R 1000:1000 /home/ruben/.config-volume /home/ruben/workspace || true
-	`
-
-	var stdout, stderr bytes.Buffer
-	err = client.ExecCommand(targetInstance, []string{"/bin/sh", "-c", command}, nil, &stdout, &stderr)
-	if err != nil {
-		return fmt.Errorf("failed to initialize config: %w\nstdout: %s\nstderr: %s", err, stdout.String(), stderr.String())
-	}
-
-	fmt.Println("Initializing config volume...")
-	return nil
-}
-
-// AttachVolumes attaches storage volumes to the instance
-func (w *Config) AttachVolumes(client *incus.Client, instanceName, remote, pool string) error {
-	// The client is already connected to the correct server, so we don't need the server prefix
-	targetInstance := instanceName
-
-	// Attach config volume
-	fmt.Println("Attaching config volume to instance...")
-	if err := client.AttachVolume(targetInstance, "config", pool, "workspace-config", "/home/ruben/.config-volume"); err != nil {
-		return fmt.Errorf("failed to attach config volume: %w", err)
-	}
-
-	// Attach workspace volume
-	fmt.Println("Attaching workspace volume to instance at ~/workspace...")
-	if err := client.AttachVolume(targetInstance, "workspace", pool, "workspace", "/home/ruben/workspace"); err != nil {
-		return fmt.Errorf("failed to attach workspace volume: %w", err)
-	}
-
-	return nil
 }
 
 // DestroyInstance removes an existing instance

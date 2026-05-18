@@ -88,11 +88,6 @@ func Execute() error {
 
 		// Wait for container to be ready
 		fmt.Println("Waiting for container to be ready...")
-
-		// Initialize config
-		if err := wsConfig.InitConfig(client, cfg.InstanceName, cfg.ServerPrefix); err != nil {
-			return fmt.Errorf("failed to initialize config: %w", err)
-		}
 	} else {
 		// Check if instance exists and is running
 		running, err := client.IsInstanceRunning(cfg.InstanceName)
@@ -126,14 +121,7 @@ func Execute() error {
 			// Wait for container to be ready
 			fmt.Println("Waiting for container to be ready...")
 
-			// Initialize config
-			wsConfig := &workspace.Config{
-				InstanceName: cfg.InstanceName,
-				Remote:       cfg.ServerPrefix,
-			}
-			if err := wsConfig.InitConfig(client, cfg.InstanceName, cfg.ServerPrefix); err != nil {
-				return fmt.Errorf("failed to initialize config: %w", err)
-			}
+		
 		} else if !running {
 			// Instance exists but not running, start it
 			if err := client.StartInstance(cfg.InstanceName); err != nil {
