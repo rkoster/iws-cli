@@ -197,15 +197,11 @@ func (w *Config) LaunchGhostty(instance, remote string) error {
 		targetInstance = remote + instance
 	}
 
-	// The command that runs inside the container to start tmux
-	containerCommand := `for s in /etc/profile.d/*.sh; do [ -f "$s" ] && . "$s"; done; for p in /nix/store/*-home-manager-path/bin; do export PATH="$p:$PATH"; done; if command -v zsh >/dev/null 2>&1; then TERM=xterm-256color exec zsh -lc "exec tmux new-session -A -s main"; else TERM=xterm-256color exec /bin/sh -c "exec tmux new-session -A -s main"; fi`
-
 	// Build the full command string for Ghostty's --command flag
-	// --command must be a single argument with the full command as its value
-	ghosttyCmd := fmt.Sprintf("incus exec %s -- /bin/sh -c '%s'", targetInstance, containerCommand)
+	// Use su - ruben for a proper login shell with full environment setup
+	ghosttyCmd := fmt.Sprintf("incus exec %s -- /bin/sh -c 'su - ruben -c \"exec tmux new-session -A -s main\"'", targetInstance)
 
 	// Launch Ghostty with the incus exec command
-	// Ghostty will open a new window and run the command inside it
 	ghosttyPath := "/Applications/Ghostty.app/Contents/MacOS/ghostty"
 	cmd := exec.Command(ghosttyPath, "--wait-after-command", fmt.Sprintf("--command=%s", ghosttyCmd))
 	cmd.Stdout = nil
