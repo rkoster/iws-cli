@@ -407,6 +407,64 @@ func (c *Client) LaunchInstance(imageRef, instanceName, pool, network string) er
 	return nil
 }
 
+// LaunchSystemContainer creates and starts a system container using the incus CLI.
+// Unlike CreateInstanceFromImage (Go API), this ensures the container boots with
+// init/systemd instead of running as an app container.
+func (c *Client) LaunchSystemContainer(imageRef, instanceName, pool string) error {
+	fmt.Printf("Launching %s\n", instanceName)
+
+	serverRemote := c.GetServerRemote()
+	if serverRemote == "" {
+		serverRemote = "local"
+	}
+
+	// Determine storage pool
+	if pool == "" {
+		var err error
+		pool, err = c.DetectStoragePool()
+		if err != nil {
+			return err
+		}
+	}
+
+	// Create storage volumes if they don't exist
+	if err := c.CreateVolumeIfNotExists(pool, "workspace-config"); err != nil {
+		return err
+	}
+	if err := c.CreateVolumeIfNotExists(pool, "workspace"); err != nil {
+		return err
+	}
+
+	// Build incus launch command
+	args := []string{
+		"launch",
+		imageRef,
+		instanceName,
+		"-c", "security.nesting=true",
+		"-d", fmt.Sprintf("config,type=disk,pool=%s,source=workspace-config,path=/home/ruben/.config-volume", pool),
+		"-d", fmt.Sprintf("workspace,type=disk,pool=%s,source=workspace,path=/home/ruben/workspace", pool),
+		"-n", "incusbr0",
+	}
+
+	if pool != "local" {
+		args = append(args, "-s", pool)
+	}
+
+	cmd := exec.Command("incus", args...)
+
+	// Set up environment to use the Incus config
+	if c.Config.ConfigDir != "" {
+		cmd.Env = append(os.Environ(), "INCUS_DIR="+c.Config.ConfigDir)
+	}
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to launch container: %w: %s", err, string(output))
+	}
+
+	return nil
+}
+
 func (c *Client) parseImageRef(ref string) api.InstanceSource {
 	source := api.InstanceSource{
 		Type: "image",
