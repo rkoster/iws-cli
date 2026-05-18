@@ -22,6 +22,12 @@ func Execute() error {
 		}
 	}
 
+	// Handle help flag
+	if cfg.Help {
+		printHelp()
+		return nil
+	}
+
 	// Initialize Incus client (handles remote detection internally)
 	client, err := incus.New()
 	if err != nil {
@@ -146,6 +152,32 @@ func Execute() error {
 	}
 
 	return nil
+}
+
+func printHelp() {
+	fmt.Fprintf(os.Stderr, `Usage: iws-cli [OPTIONS] [IMAGE] [REMOTE]
+
+Launch an Incus workspace container in Ghostty.
+
+Options:
+  --update          Rebuild workspace from latest image
+  --help, -h        Show this help message
+
+Arguments:
+  IMAGE             OCI image reference (default: oci-ghcr:rkoster/workspace:latest)
+  REMOTE            Incus remote server name
+
+Environment Variables:
+  INST              Instance name (default: workspace)
+  IMAGE             OCI image reference
+
+Examples:
+  iws-cli                           # Launch default workspace
+  iws-cli --update                  # Rebuild from latest image
+  iws-cli image=user/img:tag        # Use custom image
+  iws-cli inst=myworkspace          # Use custom instance name
+  iws-cli remote=myremote           # Use specific remote
+`)
 }
 
 // ExecCommandInInstance executes a command in the instance and returns the output

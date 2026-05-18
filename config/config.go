@@ -12,6 +12,7 @@ type Config struct {
 	Image        string
 	ServerRemote string
 	ServerPrefix string
+	Help         bool
 }
 
 // New creates a new Config with defaults
@@ -28,6 +29,9 @@ func (c *Config) ParseArguments(args []string) error {
 		switch args[i] {
 		case "--update":
 			c.Update = true
+		case "--help", "-h":
+			c.Update = true // reuse the flag to trigger help display
+			c.Help = true
 		default:
 			// Check if it's a key=value pair
 			if strings.Contains(args[i], "=") {
