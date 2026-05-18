@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"time"
 
 	"github.com/ruben-koster/iws-cli/config"
 	"github.com/ruben-koster/iws-cli/incus"
@@ -51,86 +52,45 @@ func Execute() error {
 		return fmt.Errorf("failed to configure GHCR remote: %w", err)
 	}
 
-	// Handle update flag
+	// --- Start path: ensure container is running ---
 	if cfg.Update {
 		fmt.Println("Update requested: refreshing workspace image and recreating instance")
-
-		// Destroy existing instance
 		wsConfig := &workspace.Config{
 			InstanceName: cfg.InstanceName,
 			Remote:       cfg.ServerPrefix,
 		}
-
 		if err := wsConfig.DestroyInstance(client, cfg.InstanceName, cfg.ServerPrefix); err != nil {
 			return fmt.Errorf("failed to destroy instance: %w", err)
 		}
+	}
 
-		// Pull latest image
-		alias := "rkoster-workspace-latest"
-		var launchImage string
-		if cfg.ServerRemote != "" {
-			if _, err := client.PullImage(cfg.Image, alias); err != nil {
-				return fmt.Errorf("failed to pull image to server: %w", err)
-			}
-			launchImage = cfg.ServerPrefix + alias
-		} else {
-			if _, err := client.PullImage(cfg.Image, alias); err != nil {
-				return fmt.Errorf("failed to pull image locally: %w", err)
-			}
-			launchImage = "local:" + alias
-		}
+	running, err := client.IsInstanceRunning(cfg.InstanceName)
+	if err != nil {
+		// Instance doesn't exist, create it
+		fmt.Printf("Launching %s\n", cfg.InstanceName)
 
-		// Launch instance (volumes are attached during creation)
+		launchImage := resolveImage(client, cfg.Image, cfg.ServerRemote, cfg.ServerPrefix)
+
 		pool := "local"
 		if err := client.LaunchSystemContainer(launchImage, cfg.InstanceName, pool); err != nil {
-			return fmt.Errorf("failed to launch instance: %w", err)
+			return fmt.Errorf("failed to launch container: %w", err)
 		}
 
-		// Wait for container to be ready
-		fmt.Println("Waiting for container to be ready...")
-	} else {
-		// Check if instance exists and is running
-		running, err := client.IsInstanceRunning(cfg.InstanceName)
-		if err != nil {
-			// Instance doesn't exist, create it
-			fmt.Printf("Launching %s\n", cfg.InstanceName)
-
-			alias := "rkoster-workspace-latest"
-			var launchImage string
-			if cfg.ServerRemote != "" {
-				if _, err := client.PullImage(cfg.Image, alias); err != nil {
-					fmt.Printf("Warning: failed to pull image to server: %v\n", err)
-					launchImage = cfg.Image
-				} else {
-					launchImage = cfg.ServerPrefix + alias
-				}
-			} else {
-				if _, err := client.PullImage(cfg.Image, alias); err != nil {
-					fmt.Printf("Warning: failed to pull image locally: %v\n", err)
-					launchImage = cfg.Image
-				} else {
-					launchImage = "local:" + alias
-				}
-			}
-
-			pool := "local"
-			if err := client.LaunchSystemContainer(launchImage, cfg.InstanceName, pool); err != nil {
-				return fmt.Errorf("failed to launch instance: %w", err)
-			}
-
-			// Wait for container to be ready
-			fmt.Println("Waiting for container to be ready...")
-
-		
-		} else if !running {
-			// Instance exists but not running, start it
-			if err := client.StartInstance(cfg.InstanceName); err != nil {
-				return fmt.Errorf("failed to start instance: %w", err)
-			}
+		if err := client.WaitForSystemdReady(cfg.InstanceName, 60, 2*time.Second); err != nil {
+			return fmt.Errorf("failed waiting for systemd: %w", err)
+		}
+	} else if !running {
+		// Instance exists but not running, start it
+		fmt.Printf("Starting existing instance %s\n", cfg.InstanceName)
+		if err := client.StartInstance(cfg.InstanceName); err != nil {
+			return fmt.Errorf("failed to start instance: %w", err)
+		}
+		if err := client.WaitForSystemdReady(cfg.InstanceName, 60, 2*time.Second); err != nil {
+			return fmt.Errorf("failed waiting for systemd: %w", err)
 		}
 	}
 
-	// Launch Ghostty
+	// --- Exec path: launch user session ---
 	wsConfig := &workspace.Config{
 		InstanceName: cfg.InstanceName,
 		Remote:       cfg.ServerPrefix,
@@ -140,6 +100,24 @@ func Execute() error {
 	}
 
 	return nil
+}
+
+// resolveImage pulls the image to the target server and returns the launch reference.
+// Returns the original image reference if pull fails (with a warning).
+func resolveImage(client *incus.Client, image string, serverRemote, serverPrefix string) string {
+	alias := "rkoster-workspace-latest"
+
+	// For OCI images, always try to pull (PullImage handles OCI detection)
+	_, err := client.PullImage(image, alias)
+	if err != nil {
+		fmt.Printf("Warning: failed to pull image: %v\n", err)
+		return image
+	}
+
+	if serverRemote != "" {
+		return serverPrefix + alias
+	}
+	return "local:" + alias
 }
 
 func printHelp() {
