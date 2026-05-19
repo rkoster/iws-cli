@@ -1,6 +1,7 @@
 package incus
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -28,14 +29,6 @@ func (c *Client) LaunchVM(instanceName, pool, cpu, memory, disk string) error {
 		}
 	}
 
-	// Create storage volumes if they don't exist
-	if err := c.CreateVolumeIfNotExists(pool, "workspace-config"); err != nil {
-		return err
-	}
-	if err := c.CreateVolumeIfNotExists(pool, "workspace"); err != nil {
-		return err
-	}
-
 	// Launch VM from NixOS image
 	launchArgs := []string{
 		"launch", "images:nixos/25.11", remoteInstance,
@@ -60,29 +53,27 @@ func (c *Client) LaunchVM(instanceName, pool, cpu, memory, disk string) error {
 		return fmt.Errorf("failed to launch VM: %w: %s", err, string(output))
 	}
 
-	// Add disk devices for persistent volumes
-	devices := []struct {
-		name, pool, source, path string
-	}{
-		{"config", pool, "workspace-config", "/home/ruben/.config-volume"},
-		{"workspace", pool, "workspace", "/home/ruben/workspace"},
-	}
+	return nil
+}
 
-	for _, dev := range devices {
-		addCmd := exec.Command("incus", "config", "device", "add", remoteInstance,
-			dev.name, "disk",
-			"pool="+dev.pool,
-			"source="+dev.source,
-			"path="+dev.path,
-		)
+// CreateVMDirs creates workspace directories in the VM.
+func (c *Client) CreateVMDirs(instanceName string) error {
+	serverRemote := c.GetServerRemote()
+	if serverRemote == "" {
+		serverRemote = "local"
+	}
+	remoteInstance := serverRemote + ":" + instanceName
+
+	dirs := []string{"/home/ruben/workspace", "/home/ruben/.config-volume"}
+	for _, dir := range dirs {
+		cmd := exec.Command("incus", "exec", remoteInstance, "--", "mkdir", "-p", dir)
 		if c.Config.ConfigDir != "" {
-			addCmd.Env = append(os.Environ(), "INCUS_DIR="+c.Config.ConfigDir)
+			cmd.Env = append(os.Environ(), "INCUS_DIR="+c.Config.ConfigDir)
 		}
-		if out, err := addCmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("failed to add device %s: %w: %s", dev.name, err, string(out))
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to create dir %s: %w: %s", dir, err, string(out))
 		}
 	}
-
 	return nil
 }
 
@@ -120,7 +111,9 @@ func (c *Client) WaitForBoot(instanceName string, maxAttempts int, pollInterval 
 	return fmt.Errorf("timed out waiting for VM to boot")
 }
 
-// PushConfig pushes the local nixpkgs config directory into the VM at /etc/nixos/.
+// PushConfig pushes the local nixpkgs config directory into the VM at /opt/nixos-config/.
+// Creates a temp directory locally with only the needed files (excluding node_modules, .opencode, etc.),
+// then uses incus file push to transfer it.
 func (c *Client) PushConfig(instanceName, localPath string) error {
 	fmt.Printf("Pushing config from %s into VM...\n", localPath)
 
@@ -135,20 +128,63 @@ func (c *Client) PushConfig(instanceName, localPath string) error {
 	}
 	remoteInstance := serverRemote + ":" + instanceName
 
+	// Create a temp directory with filtered files
+	tmpDir, err := os.MkdirTemp("", "iws-config-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create nixos-config subdir inside temp dir
+	nixosConfigDir := tmpDir + "/nixos-config"
+	if err := os.Mkdir(nixosConfigDir, 0755); err != nil {
+		return fmt.Errorf("failed to create nixos-config dir: %w", err)
+	}
+
+	// Use tar to extract filtered files into nixos-config subdir
+	tarCmd := exec.Command("tar", "xzf", "-", "-C", nixosConfigDir,
+		"--exclude=node_modules",
+		"--exclude=.opencode",
+		"--exclude=result")
+
+	// Create the archive first
+	archiveCmd := exec.Command("tar", "czf", "-",
+		"--exclude=node_modules",
+		"--exclude=.opencode",
+		"--exclude=result",
+		"-C", localPath, ".")
+	archiveOut, _ := archiveCmd.Output()
+
+	tarCmd.Stdin = bytes.NewReader(archiveOut)
+	if out, err := tarCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to extract to temp dir: %w: %s", err, string(out))
+	}
+
+	// Push to /opt/ — push the nixos-config subdir
+	// incus file push pushes the source dir as a child of the target
 	cmd := exec.Command("incus", "file", "push", "--recursive", "--create-dirs",
-		localPath+"/", remoteInstance+"/etc/nixos/")
+		nixosConfigDir+"/", remoteInstance+"/opt/")
 	if c.Config.ConfigDir != "" {
 		cmd.Env = append(os.Environ(), "INCUS_DIR="+c.Config.ConfigDir)
 	}
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("failed to push config: %w: %s", err, string(output))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to push config: %w: %s", err, string(out))
 	}
+
+	// Fix ownership — incus file push preserves local UIDs which don't match VM users
+	// Git refuses to open repos owned by unknown users
+	chownCmd := exec.Command("incus", "exec", remoteInstance, "--",
+		"bash", "-c", "source /etc/profile && chown -R root:root /opt/nixos-config")
+	if c.Config.ConfigDir != "" {
+		chownCmd.Env = append(os.Environ(), "INCUS_DIR="+c.Config.ConfigDir)
+	}
+	chownCmd.Run()
 
 	return nil
 }
 
 // Provision runs nixos-rebuild switch inside the VM.
+// Reads flake.nix from /opt/nixos-config to determine the config name.
 func (c *Client) Provision(instanceName string) error {
 	fmt.Println("Running nixos-rebuild switch...")
 
@@ -158,7 +194,9 @@ func (c *Client) Provision(instanceName string) error {
 	}
 	remoteInstance := serverRemote + ":" + instanceName
 
-	cmd := exec.Command("incus", "exec", remoteInstance, "--", "nixos-rebuild", "switch")
+	flakeName := c.detectFlakeConfig(remoteInstance)
+	cmd := exec.Command("incus", "exec", remoteInstance, "--", "bash", "-c",
+		"source /etc/profile && cd /tmp && nixos-rebuild switch --flake /opt/nixos-config#"+flakeName)
 	if c.Config.ConfigDir != "" {
 		cmd.Env = append(os.Environ(), "INCUS_DIR="+c.Config.ConfigDir)
 	}
@@ -171,4 +209,26 @@ func (c *Client) Provision(instanceName string) error {
 
 	fmt.Println("Provisioning complete")
 	return nil
+}
+
+// detectFlakeConfig reads flake.nix to find the nixosConfigurations key name.
+func (c *Client) detectFlakeConfig(remoteInstance string) string {
+	cmd := exec.Command("incus", "exec", remoteInstance, "--",
+		"bash", "-c", "source /etc/profile && grep -oP 'nixosConfigurations\\.\\K[a-zA-Z0-9_-]+' /opt/nixos-config/flake.nix")
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		name := strings.TrimSpace(string(output))
+		if name != "" {
+			return name
+		}
+	}
+	// Fallback: try "workspace" then "default"
+	for _, fallback := range []string{"workspace", "default"} {
+		cmd = exec.Command("incus", "exec", remoteInstance, "--",
+			"bash", "-c", "source /etc/profile && grep -q 'nixosConfigurations."+fallback+"' /opt/nixos-config/flake.nix")
+		if cmd.Run() == nil {
+			return fallback
+		}
+	}
+	return "workspace"
 }

@@ -62,6 +62,11 @@ func Execute() error {
 			return fmt.Errorf("VM boot failed: %w", err)
 		}
 
+		// Create workspace directories in the VM
+		if err := client.CreateVMDirs(cfg.InstanceName); err != nil {
+			return fmt.Errorf("failed to create workspace dirs: %w", err)
+		}
+
 		// Provision if config exists
 		if _, statErr := os.Stat(cfg.NixpkgsPath); statErr == nil {
 			if err := client.PushConfig(cfg.InstanceName, cfg.NixpkgsPath); err != nil {
