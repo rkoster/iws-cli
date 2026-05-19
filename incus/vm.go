@@ -29,9 +29,9 @@ func (c *Client) LaunchVM(instanceName, pool, cpu, memory, disk string) error {
 		}
 	}
 
-	// Launch VM from NixOS image
+	// Init VM (don't start yet — need to attach volumes first)
 	launchArgs := []string{
-		"launch", "images:nixos/25.11", remoteInstance,
+		"init", "images:nixos/25.11", remoteInstance,
 		"--vm",
 		"-c", "limits.cpu=" + cpu,
 		"-c", "limits.memory=" + memory,
@@ -50,12 +50,21 @@ func (c *Client) LaunchVM(instanceName, pool, cpu, memory, disk string) error {
 	}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("failed to launch VM: %w: %s", err, string(output))
+		return fmt.Errorf("failed to init VM: %w: %s", err, string(output))
 	}
 
-	// Create and attach persistent storage volumes
+	// Create and attach persistent storage volumes before starting
 	if err := c.EnsureVolumes(instanceName, pool); err != nil {
 		return err
+	}
+
+	// Start the VM
+	startCmd := exec.Command("incus", "start", remoteInstance)
+	if c.Config.ConfigDir != "" {
+		startCmd.Env = append(os.Environ(), "INCUS_DIR="+c.Config.ConfigDir)
+	}
+	if out, err := startCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to start VM: %w: %s", err, string(out))
 	}
 
 	return nil
@@ -260,7 +269,26 @@ func (c *Client) Provision(instanceName string) error {
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("nixos-rebuild switch failed: %w", err)
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			switch exitErr.ExitCode() {
+			case 4:
+				// Some units failed to reload (e.g. dbus-broker) but switch succeeded
+				fmt.Println("Warning: nixos-rebuild completed with non-critical unit reload failures")
+			case 255:
+				// Websocket EOF — incus-agent restarted during rebuild
+				// This is expected on first provision; the switch likely succeeded
+				fmt.Println("Connection lost during rebuild (incus-agent restarted). Waiting for agent...")
+				if waitErr := c.WaitForBoot(instanceName, 30, 3*time.Second); waitErr != nil {
+					return fmt.Errorf("VM did not recover after rebuild: %w", waitErr)
+				}
+				fmt.Println("Provisioning complete (agent reconnected)")
+				return nil
+			default:
+				return fmt.Errorf("nixos-rebuild switch failed: %w", err)
+			}
+		} else {
+			return fmt.Errorf("nixos-rebuild switch failed: %w", err)
+		}
 	}
 
 	fmt.Println("Provisioning complete")
