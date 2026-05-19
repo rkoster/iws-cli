@@ -2,10 +2,8 @@ package workspace
 
 import (
 	"fmt"
-	"io"
 	"os/exec"
 
-	"github.com/lxc/incus/v7/shared/api"
 	"github.com/ruben-koster/iws-cli/incus"
 )
 
@@ -17,53 +15,16 @@ type Config struct {
 
 // DestroyInstance removes an existing instance
 func (w *Config) DestroyInstance(client *incus.Client, instanceName, remote string) error {
-	// The client is already connected to the correct server, so we don't need the server prefix
-	// Just use the instance name directly
-	targetInstance := instanceName
-	
 	// Check if instance exists first
-	running, err := client.IsInstanceRunning(targetInstance)
+	_, err := client.IsInstanceRunning(instanceName)
 	if err != nil {
-		// Instance doesn't exist, nothing to destroy
 		fmt.Printf("Instance '%s' does not exist, nothing to destroy\n", instanceName)
 		return nil
 	}
 
-	// Instance exists, stop it first if running
-	if running {
-		fmt.Printf("Stopping running instance '%s'...\n", instanceName)
-		
-		// Stop the instance with a reasonable timeout
-		reqState := api.InstanceStatePut{
-			Action:  "stop",
-			Timeout: 30,
-			Force:   false,
-		}
-		
-		op, err := client.GetClient().UpdateInstanceState(targetInstance, reqState, "")
-		if err != nil {
-			return fmt.Errorf("failed to stop instance: %w", err)
-		}
-		
-		if err := op.Wait(); err != nil {
-			// If stop fails, try force stop
-			fmt.Printf("Normal stop failed, trying force stop...\n")
-			reqState.Force = true
-			op, err = client.GetClient().UpdateInstanceState(targetInstance, reqState, "")
-			if err != nil {
-				return fmt.Errorf("failed to force stop instance: %w", err)
-			}
-			if err := op.Wait(); err != nil {
-				return fmt.Errorf("failed to wait for instance force stop: %w", err)
-			}
-		}
-		
-		fmt.Printf("Instance '%s' stopped successfully\n", instanceName)
-	}
-
-	// Now destroy the instance
+	// Destroy with force (handles running instances)
 	fmt.Printf("Destroying existing instance '%s'...\n", instanceName)
-	if err := client.DestroyInstance(targetInstance); err != nil {
+	if err := client.DestroyInstance(instanceName); err != nil {
 		return fmt.Errorf("failed to destroy instance: %w", err)
 	}
 
@@ -92,14 +53,4 @@ func (w *Config) LaunchGhostty(instance, remote string) error {
 	cmd.Start()
 
 	return nil
-}
-
-// ExecCommandInInstance executes a command in the instance
-func ExecCommandInInstance(client *incus.Client, instanceName, remote string, command []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) error {
-	targetInstance := instanceName
-	if remote != "" {
-		targetInstance = remote + ":" + instanceName
-	}
-
-	return client.ExecCommand(targetInstance, command, stdin, stdout, stderr)
 }

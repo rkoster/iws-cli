@@ -123,21 +123,10 @@ func (c *Client) CreateVMDirs(instanceName string) error {
 	dirs := []string{"/home/ruben/workspace", "/home/ruben/.config-volume"}
 	for _, dir := range dirs {
 		cmd := exec.Command("incus", "exec", remoteInstance, "--", "mkdir", "-p", dir)
-		if c.Config.ConfigDir != "" {
-			cmd.Env = append(os.Environ(), "INCUS_DIR="+c.Config.ConfigDir)
-		}
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("failed to create dir %s: %w: %s", dir, err, string(out))
 		}
 	}
-
-	// Fix ownership — volumes mount as root, need to be owned by ruben
-	chownCmd := exec.Command("incus", "exec", remoteInstance, "--",
-		"bash", "-lc", "chown -R ruben:users /home/ruben/workspace /home/ruben/.config-volume")
-	if c.Config.ConfigDir != "" {
-		chownCmd.Env = append(os.Environ(), "INCUS_DIR="+c.Config.ConfigDir)
-	}
-	chownCmd.Run()
 
 	return nil
 }
@@ -237,9 +226,8 @@ func (c *Client) PushConfig(instanceName, localPath string) error {
 	}
 
 	// Fix ownership — incus file push preserves local UIDs which don't match VM users
-	// Git refuses to open repos owned by unknown users
 	chownCmd := exec.Command("incus", "exec", remoteInstance, "--",
-		"bash", "-c", "source /etc/profile && chown -R root:root /opt/nixos-config")
+		"chown", "-R", "root:root", "/opt/nixos-config")
 	if c.Config.ConfigDir != "" {
 		chownCmd.Env = append(os.Environ(), "INCUS_DIR="+c.Config.ConfigDir)
 	}
