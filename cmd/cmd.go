@@ -1,188 +1,141 @@
 package cmd
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"runtime"
+	"time"
 
 	"github.com/ruben-koster/iws-cli/config"
 	"github.com/ruben-koster/iws-cli/incus"
 	"github.com/ruben-koster/iws-cli/workspace"
 )
 
-// Execute is the main entry point for the iws CLI
 func Execute() error {
 	cfg := config.New()
 
-	// Parse command-line arguments
 	if len(os.Args) > 1 {
 		if err := cfg.ParseArguments(os.Args[1:]); err != nil {
 			return fmt.Errorf("failed to parse arguments: %w", err)
 		}
 	}
 
-	// Handle help flag
 	if cfg.Help {
 		printHelp()
 		return nil
 	}
 
-	// Initialize Incus client (handles remote detection internally)
+	// Initialize Incus client
 	client, err := incus.New()
 	if err != nil {
 		return fmt.Errorf("failed to initialize Incus client: %w", err)
 	}
 
-	// Get the detected server remote
 	serverRemote := client.GetServerRemote()
 	if serverRemote != "" {
 		cfg.ServerRemote = serverRemote
 		cfg.ServerPrefix = serverRemote + ":"
-	} else {
-		// On non-Linux platforms, a remote Incus server is required
-		if runtime.GOOS != "linux" {
-			return fmt.Errorf("no remote Incus server detected. On macOS, a remote server is required to run containers.")
-		}
+	} else if runtime.GOOS != "linux" {
+		return fmt.Errorf("no remote Incus server detected. On macOS, a remote server is required.")
 	}
 
-	// Configure GHCR remote if needed
-	if err := client.ConfigureGHCRRemote(); err != nil {
-		return fmt.Errorf("failed to configure GHCR remote: %w", err)
+	// Handle --destroy
+	if cfg.Destroy {
+		wsConfig := &workspace.Config{InstanceName: cfg.InstanceName, Remote: cfg.ServerPrefix}
+		return wsConfig.DestroyInstance(client, cfg.InstanceName, cfg.ServerPrefix)
 	}
 
-	// Handle update flag
-	if cfg.Update {
-		fmt.Println("Update requested: refreshing workspace image and recreating instance")
-
-		// Destroy existing instance
-		wsConfig := &workspace.Config{
-			InstanceName: cfg.InstanceName,
-			Remote:       cfg.ServerPrefix,
-		}
-
-		if err := wsConfig.DestroyInstance(client, cfg.InstanceName, cfg.ServerPrefix); err != nil {
-			return fmt.Errorf("failed to destroy instance: %w", err)
-		}
-
-		// Pull latest image
-		alias := "rkoster-workspace-latest"
-		var launchImage string
-		if cfg.ServerRemote != "" {
-			if _, err := client.PullImage(cfg.Image, alias); err != nil {
-				return fmt.Errorf("failed to pull image to server: %w", err)
-			}
-			launchImage = cfg.ServerPrefix + alias
-		} else {
-			if _, err := client.PullImage(cfg.Image, alias); err != nil {
-				return fmt.Errorf("failed to pull image locally: %w", err)
-			}
-			launchImage = "local:" + alias
-		}
-
-		// Launch instance (volumes are attached during creation)
-		pool := "local"
-		if err := client.LaunchInstance(launchImage, cfg.InstanceName, pool, ""); err != nil {
-			return fmt.Errorf("failed to launch instance: %w", err)
-		}
-
-		// Wait for container to be ready
-		fmt.Println("Waiting for container to be ready...")
-
-		// Initialize config
-		if err := wsConfig.InitConfig(client, cfg.InstanceName, cfg.ServerPrefix); err != nil {
-			return fmt.Errorf("failed to initialize config: %w", err)
-		}
-	} else {
-		// Check if instance exists and is running
-		running, err := client.IsInstanceRunning(cfg.InstanceName)
+	// Check if VM exists and is running
+	running, err := client.IsInstanceRunning(cfg.InstanceName)
+	if err != nil {
+		// VM doesn't exist — create it
+		pool, err := client.DetectStoragePool()
 		if err != nil {
-			// Instance doesn't exist, create it
-			fmt.Printf("Launching %s\n", cfg.InstanceName)
+			return fmt.Errorf("failed to detect storage pool: %w", err)
+		}
 
-			alias := "rkoster-workspace-latest"
-			var launchImage string
-			if cfg.ServerRemote != "" {
-				if _, err := client.PullImage(cfg.Image, alias); err != nil {
-					fmt.Printf("Warning: failed to pull image to server: %v\n", err)
-					launchImage = cfg.Image
-				} else {
-					launchImage = cfg.ServerPrefix + alias
-				}
-			} else {
-				if _, err := client.PullImage(cfg.Image, alias); err != nil {
-					fmt.Printf("Warning: failed to pull image locally: %v\n", err)
-					launchImage = cfg.Image
-				} else {
-					launchImage = "local:" + alias
-				}
-			}
+		if err := client.LaunchVM(cfg.InstanceName, pool, cfg.CPU, cfg.Memory, cfg.Disk); err != nil {
+			return fmt.Errorf("failed to launch VM: %w", err)
+		}
 
-			pool := "local"
-			if err := client.LaunchInstance(launchImage, cfg.InstanceName, pool, ""); err != nil {
-				return fmt.Errorf("failed to launch instance: %w", err)
-			}
+		if err := client.WaitForBoot(cfg.InstanceName, 90, 2*time.Second); err != nil {
+			return fmt.Errorf("VM boot failed: %w", err)
+		}
 
-			// Wait for container to be ready
-			fmt.Println("Waiting for container to be ready...")
+		// Create workspace directories in the VM
+		if err := client.CreateVMDirs(cfg.InstanceName); err != nil {
+			return fmt.Errorf("failed to create workspace dirs: %w", err)
+		}
 
-			// Initialize config
-			wsConfig := &workspace.Config{
-				InstanceName: cfg.InstanceName,
-				Remote:       cfg.ServerPrefix,
+		// Provision if config exists
+		if _, statErr := os.Stat(cfg.NixpkgsPath); statErr == nil {
+			if err := client.PushConfig(cfg.InstanceName, cfg.NixpkgsPath); err != nil {
+				return fmt.Errorf("failed to push config: %w", err)
 			}
-			if err := wsConfig.InitConfig(client, cfg.InstanceName, cfg.ServerPrefix); err != nil {
-				return fmt.Errorf("failed to initialize config: %w", err)
+			if err := client.Provision(cfg.InstanceName); err != nil {
+				return fmt.Errorf("provisioning failed: %w", err)
 			}
-		} else if !running {
-			// Instance exists but not running, start it
-			if err := client.StartInstance(cfg.InstanceName); err != nil {
-				return fmt.Errorf("failed to start instance: %w", err)
+		} else {
+			fmt.Printf("Note: no config at %s, launching vanilla NixOS\n", cfg.NixpkgsPath)
+		}
+	} else if !running {
+		// VM exists but stopped — start it
+		fmt.Printf("Starting VM %s\n", cfg.InstanceName)
+		if err := client.StartInstance(cfg.InstanceName); err != nil {
+			return fmt.Errorf("failed to start VM: %w", err)
+		}
+		if err := client.WaitForBoot(cfg.InstanceName, 90, 2*time.Second); err != nil {
+			return fmt.Errorf("VM boot failed: %w", err)
+		}
+	} else if cfg.Update {
+		// VM running + --update: converge VM config and re-provision
+		pool, _ := client.DetectStoragePool()
+		if pool != "" {
+			if err := client.EnsureVolumes(cfg.InstanceName, pool); err != nil {
+				return fmt.Errorf("failed to ensure volumes: %w", err)
 			}
+		}
+		if err := client.CreateVMDirs(cfg.InstanceName); err != nil {
+			return fmt.Errorf("failed to fix directory ownership: %w", err)
+		}
+		if _, statErr := os.Stat(cfg.NixpkgsPath); statErr != nil {
+			return fmt.Errorf("config directory not found: %s", cfg.NixpkgsPath)
+		}
+		if err := client.PushConfig(cfg.InstanceName, cfg.NixpkgsPath); err != nil {
+			return fmt.Errorf("failed to push config: %w", err)
+		}
+		if err := client.Provision(cfg.InstanceName); err != nil {
+			return fmt.Errorf("provisioning failed: %w", err)
 		}
 	}
 
-	// Launch Ghostty
-	wsConfig := &workspace.Config{
-		InstanceName: cfg.InstanceName,
-		Remote:       cfg.ServerPrefix,
-	}
-	if err := wsConfig.LaunchGhostty(cfg.InstanceName, cfg.ServerPrefix); err != nil {
-		return fmt.Errorf("failed to launch Ghostty: %w", err)
-	}
-
-	return nil
+	// Connect via Ghostty
+	wsConfig := &workspace.Config{InstanceName: cfg.InstanceName, Remote: cfg.ServerPrefix}
+	return wsConfig.LaunchGhostty(cfg.InstanceName, cfg.ServerPrefix)
 }
 
 func printHelp() {
-	fmt.Fprintf(os.Stderr, `Usage: iws-cli [OPTIONS] [IMAGE] [REMOTE]
+	fmt.Fprintf(os.Stderr, `Usage: iws [OPTIONS]
 
-Launch an Incus workspace container in Ghostty.
+Launch a NixOS VM workspace and connect via Ghostty.
 
 Options:
-  --update          Rebuild workspace from latest image
+  --update          Push config and run nixos-rebuild switch
+  --destroy         Stop and delete the VM (volumes preserved)
   --help, -h        Show this help message
 
-Arguments:
-  IMAGE             OCI image reference (default: oci-ghcr:rkoster/workspace:latest)
-  REMOTE            Incus remote server name
+Configuration:
+  inst=NAME         Instance name (default: workspace, env: INST)
+  cpu=N             CPU count (default: 4, env: IWS_CPU)
+  memory=SIZE       Memory limit (default: 8GiB, env: IWS_MEMORY)
+  disk=SIZE         Root disk size (default: 50GiB, env: IWS_DISK)
 
-Environment Variables:
-  INST              Instance name (default: workspace)
-  IMAGE             OCI image reference
+Config directory: ~/.config/iws/nixpkgs/ (env: IWS_NIXPKGS)
 
 Examples:
-  iws-cli                           # Launch default workspace
-  iws-cli --update                  # Rebuild from latest image
-  iws-cli image=user/img:tag        # Use custom image
-  iws-cli inst=myworkspace          # Use custom instance name
-  iws-cli remote=myremote           # Use specific remote
+  iws                       # Launch or connect to workspace VM
+  iws --update              # Re-provision with latest config
+  iws --destroy             # Delete VM (keeps volumes)
+  iws cpu=8 memory=16GiB    # Custom resources
 `)
-}
-
-// ExecCommandInInstance executes a command in the instance and returns the output
-func ExecCommandInInstance(client *incus.Client, instanceName, remote string, command []string) (string, error) {
-	var stdout bytes.Buffer
-	err := client.ExecCommand(instanceName, command, nil, &stdout, nil)
-	return stdout.String(), err
 }
