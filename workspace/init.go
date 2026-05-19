@@ -79,8 +79,9 @@ func (w *Config) LaunchGhostty(instance, remote string) error {
 	}
 
 	// Build the full command string for Ghostty's --command flag
-	// Use su - ruben for a proper login shell with full environment setup
-	ghosttyCmd := fmt.Sprintf("incus exec %s -- /bin/sh -c 'su - ruben -c \"exec tmux new-session -A -s main\"'", targetInstance)
+	// Use bash -lc to get full NixOS PATH, then su - ruben for user environment
+	// Set TERM=xterm-256color since the VM doesn't have xterm-ghostty terminfo
+	ghosttyCmd := fmt.Sprintf("incus exec %s -- bash -lc 'export TERM=xterm-256color; su - ruben -c \"exec tmux new-session -A -s main\"'", targetInstance)
 
 	// Launch Ghostty with the incus exec command
 	ghosttyPath := "/Applications/Ghostty.app/Contents/MacOS/ghostty"

@@ -88,7 +88,16 @@ func Execute() error {
 			return fmt.Errorf("VM boot failed: %w", err)
 		}
 	} else if cfg.Update {
-		// VM running + --update: push config and re-provision
+		// VM running + --update: converge VM config and re-provision
+		pool, _ := client.DetectStoragePool()
+		if pool != "" {
+			if err := client.EnsureVolumes(cfg.InstanceName, pool); err != nil {
+				return fmt.Errorf("failed to ensure volumes: %w", err)
+			}
+		}
+		if err := client.CreateVMDirs(cfg.InstanceName); err != nil {
+			return fmt.Errorf("failed to fix directory ownership: %w", err)
+		}
 		if _, statErr := os.Stat(cfg.NixpkgsPath); statErr != nil {
 			return fmt.Errorf("config directory not found: %s", cfg.NixpkgsPath)
 		}

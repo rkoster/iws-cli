@@ -53,6 +53,53 @@ func (c *Client) LaunchVM(instanceName, pool, cpu, memory, disk string) error {
 		return fmt.Errorf("failed to launch VM: %w: %s", err, string(output))
 	}
 
+	// Create and attach persistent storage volumes
+	if err := c.EnsureVolumes(instanceName, pool); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// EnsureVolumes creates storage volumes if needed and attaches them to the instance.
+// Safe to call multiple times — skips volumes already attached.
+func (c *Client) EnsureVolumes(instanceName, pool string) error {
+	serverRemote := c.GetServerRemote()
+	if serverRemote == "" {
+		serverRemote = "local"
+	}
+	remoteInstance := serverRemote + ":" + instanceName
+
+	volumes := []struct {
+		name, path string
+	}{
+		{"workspace", "/home/ruben/workspace"},
+		{"workspace-config", "/home/ruben/.config-volume"},
+	}
+
+	for _, vol := range volumes {
+		if err := c.CreateVolumeIfNotExists(pool, vol.name); err != nil {
+			return fmt.Errorf("failed to create volume %s: %w", vol.name, err)
+		}
+
+		addCmd := exec.Command("incus", "config", "device", "add", remoteInstance,
+			vol.name, "disk",
+			"pool="+pool,
+			"source="+vol.name,
+			"path="+vol.path,
+		)
+		if c.Config.ConfigDir != "" {
+			addCmd.Env = append(os.Environ(), "INCUS_DIR="+c.Config.ConfigDir)
+		}
+		out, err := addCmd.CombinedOutput()
+		if err != nil {
+			// Ignore "already exists" errors
+			if !strings.Contains(string(out), "already exists") {
+				return fmt.Errorf("failed to attach volume %s: %w: %s", vol.name, err, string(out))
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -74,6 +121,15 @@ func (c *Client) CreateVMDirs(instanceName string) error {
 			return fmt.Errorf("failed to create dir %s: %w: %s", dir, err, string(out))
 		}
 	}
+
+	// Fix ownership — volumes mount as root, need to be owned by ruben
+	chownCmd := exec.Command("incus", "exec", remoteInstance, "--",
+		"bash", "-lc", "chown -R ruben:users /home/ruben/workspace /home/ruben/.config-volume")
+	if c.Config.ConfigDir != "" {
+		chownCmd.Env = append(os.Environ(), "INCUS_DIR="+c.Config.ConfigDir)
+	}
+	chownCmd.Run()
+
 	return nil
 }
 
