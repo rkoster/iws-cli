@@ -2,56 +2,58 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 )
 
-// Config holds all configuration for the iws CLI
 type Config struct {
 	InstanceName string
 	Update       bool
-	Image        string
+	Destroy      bool
+	Help         bool
 	ServerRemote string
 	ServerPrefix string
-	Help         bool
+	// VM resources
+	CPU         string
+	Memory      string
+	Disk        string
+	NixpkgsPath string
 }
 
-// New creates a new Config with defaults
 func New() *Config {
+	home, _ := os.UserHomeDir()
 	return &Config{
 		InstanceName: getEnv("INST", "workspace"),
-		Image:        getEnv("IMAGE", "oci-ghcr:rkoster/workspace:latest"),
+		CPU:          getEnv("IWS_CPU", "4"),
+		Memory:       getEnv("IWS_MEMORY", "8GiB"),
+		Disk:         getEnv("IWS_DISK", "50GiB"),
+		NixpkgsPath:  getEnv("IWS_NIXPKGS", filepath.Join(home, ".config", "iws", "nixpkgs")),
 	}
 }
 
-// ParseArguments processes command-line arguments
 func (c *Config) ParseArguments(args []string) error {
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--update":
 			c.Update = true
+		case "--destroy":
+			c.Destroy = true
 		case "--help", "-h":
-			c.Update = true // reuse the flag to trigger help display
 			c.Help = true
 		default:
-			// Check if it's a key=value pair
 			if strings.Contains(args[i], "=") {
 				parts := strings.SplitN(args[i], "=", 2)
-				key := parts[0]
-				value := parts[1]
-				switch key {
-				case "image":
-					c.Image = value
-				case "remote":
-					c.ServerRemote = value
+				switch parts[0] {
 				case "inst":
-					c.InstanceName = value
-				}
-			} else {
-				// Positional arguments
-				if c.Image == getEnv("IMAGE", "oci-ghcr:rkoster/workspace:latest") {
-					c.Image = args[i]
-				} else if c.ServerRemote == "" {
-					c.ServerRemote = args[i]
+					c.InstanceName = parts[1]
+				case "remote":
+					c.ServerRemote = parts[1]
+				case "cpu":
+					c.CPU = parts[1]
+				case "memory":
+					c.Memory = parts[1]
+				case "disk":
+					c.Disk = parts[1]
 				}
 			}
 		}
