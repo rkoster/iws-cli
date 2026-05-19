@@ -79,35 +79,38 @@ func (c *Client) EnsureVolumes(instanceName, pool string) error {
 	}
 	remoteInstance := serverRemote + ":" + instanceName
 
-	volumes := []struct {
-		name, path string
-	}{
-		{"workspace", "/home/ruben/workspace"},
-		{"workspace-config", "/home/ruben/.config-volume"},
+	// workspace: virtiofs (filesystem volume with path)
+	if err := c.CreateVolumeIfNotExists(pool, "workspace"); err != nil {
+		return fmt.Errorf("failed to create volume workspace: %w", err)
+	}
+	addCmd := exec.Command("incus", "config", "device", "add", remoteInstance,
+		"workspace", "disk",
+		"pool="+pool,
+		"source=workspace",
+		"path=/home/ruben/workspace",
+	)
+	if out, err := addCmd.CombinedOutput(); err != nil {
+		if !strings.Contains(string(out), "already exists") {
+			return fmt.Errorf("failed to attach volume workspace: %w: %s", err, string(out))
+		}
 	}
 
-	for _, vol := range volumes {
-		if err := c.CreateVolumeIfNotExists(pool, vol.name); err != nil {
-			return fmt.Errorf("failed to create volume %s: %w", vol.name, err)
-		}
-
-		addCmd := exec.Command("incus", "config", "device", "add", remoteInstance,
-			vol.name, "disk",
-			"pool="+pool,
-			"source="+vol.name,
-			"path="+vol.path,
-		)
-		if c.Config.ConfigDir != "" {
-			addCmd.Env = append(os.Environ(), "INCUS_DIR="+c.Config.ConfigDir)
-		}
-		out, err := addCmd.CombinedOutput()
-		if err != nil {
-			// Ignore "already exists" errors
-			if !strings.Contains(string(out), "already exists") {
-				return fmt.Errorf("failed to attach volume %s: %w: %s", vol.name, err, string(out))
-			}
+	// workspace-config: block volume (mounted via NixOS fstab as ext4)
+	if err := c.CreateBlockVolumeIfNotExists(pool, "workspace-config", "2GiB"); err != nil {
+		return fmt.Errorf("failed to create block volume workspace-config: %w", err)
+	}
+	addBlockCmd := exec.Command("incus", "config", "device", "add", remoteInstance,
+		"workspace-config", "disk",
+		"pool="+pool,
+		"source=workspace-config",
+	)
+	if out, err := addBlockCmd.CombinedOutput(); err != nil {
+		if !strings.Contains(string(out), "already exists") {
+			return fmt.Errorf("failed to attach block volume workspace-config: %w: %s", err, string(out))
 		}
 	}
+
+	// Format the block volume if needed (after VM boot, handled by FormatConfigVolume)
 
 	return nil
 }

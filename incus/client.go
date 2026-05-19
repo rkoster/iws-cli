@@ -141,3 +141,52 @@ func (c *Client) CreateVolumeIfNotExists(pool, volumeName string) error {
 	fmt.Printf("Created %s volume on pool '%s'\n", volumeName, pool)
 	return nil
 }
+
+// CreateBlockVolumeIfNotExists creates a block storage volume if it doesn't exist
+func (c *Client) CreateBlockVolumeIfNotExists(pool, volumeName, size string) error {
+	serverRemote := c.GetServerRemote()
+	target := ""
+	if serverRemote != "" {
+		target = serverRemote + ":"
+	}
+
+	// Check if volume exists
+	cmd := exec.Command("incus", "storage", "volume", "show", target+pool, volumeName)
+	if cmd.Run() == nil {
+		return nil // Volume already exists
+	}
+
+	// Create the block volume
+	createCmd := exec.Command("incus", "storage", "volume", "create", target+pool, volumeName, "--type=block", "size="+size)
+	if out, err := createCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to create block volume: %w: %s", err, string(out))
+	}
+
+	fmt.Printf("Created block volume %s (%s) on pool '%s'\n", volumeName, size, pool)
+	return nil
+}
+
+// FormatConfigVolume formats the config block volume with ext4 if not already formatted
+func (c *Client) FormatConfigVolume(instanceName string) error {
+	serverRemote := c.GetServerRemote()
+	if serverRemote == "" {
+		serverRemote = "local"
+	}
+	remoteInstance := serverRemote + ":" + instanceName
+
+	// Check if already formatted (blkid returns 0 if filesystem detected)
+	checkCmd := exec.Command("incus", "exec", remoteInstance, "--", "blkid", "/dev/sda")
+	if checkCmd.Run() == nil {
+		return nil // Already formatted
+	}
+
+	// Format as ext4 with label
+	fmt.Println("Formatting config volume as ext4...")
+	fmtCmd := exec.Command("incus", "exec", remoteInstance, "--",
+		"mkfs.ext4", "-L", "config-vol", "/dev/sda")
+	if out, err := fmtCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to format config volume: %w: %s", err, string(out))
+	}
+
+	return nil
+}

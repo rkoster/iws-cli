@@ -62,6 +62,11 @@ func Execute() error {
 			return fmt.Errorf("VM boot failed: %w", err)
 		}
 
+		// Format the config block volume if new
+		if err := client.FormatConfigVolume(cfg.InstanceName); err != nil {
+			return fmt.Errorf("failed to format config volume: %w", err)
+		}
+
 		// Create workspace directories in the VM
 		if err := client.CreateVMDirs(cfg.InstanceName); err != nil {
 			return fmt.Errorf("failed to create workspace dirs: %w", err)
