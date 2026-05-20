@@ -72,6 +72,9 @@ func (c *Client) IsInstanceRunning(instanceName string) (bool, error) {
 	}
 
 	status := strings.TrimSpace(string(output))
+	if status == "" {
+		return false, fmt.Errorf("instance %s not found", instanceName)
+	}
 	return status == "RUNNING", nil
 }
 
@@ -174,16 +177,19 @@ func (c *Client) FormatConfigVolume(instanceName string) error {
 	}
 	remoteInstance := serverRemote + ":" + instanceName
 
-	// Check if already formatted (blkid returns 0 if filesystem detected)
-	checkCmd := exec.Command("incus", "exec", remoteInstance, "--", "blkid", "/dev/sda")
+	// Check if already formatted by looking for the label
+	// Device names (sda/sdb) are not stable across reboots, so use label detection
+	checkCmd := exec.Command("incus", "exec", remoteInstance, "--",
+		"bash", "-c", "blkid -L config-vol >/dev/null 2>&1")
 	if checkCmd.Run() == nil {
 		return nil // Already formatted
 	}
 
-	// Format as ext4 with label
+	// Find the unformatted block device (the one without partitions that isn't the root disk)
+	// The block volume is the device with no partitions and no filesystem
 	fmt.Println("Formatting config volume as ext4...")
 	fmtCmd := exec.Command("incus", "exec", remoteInstance, "--",
-		"mkfs.ext4", "-L", "config-vol", "/dev/sda")
+		"bash", "-c", "DEV=$(lsblk -dno NAME,TYPE | awk '$2==\"disk\"{print \"/dev/\"$1}' | while read d; do if ! blkid \"$d\" >/dev/null 2>&1 && [ ! -e \"${d}1\" ]; then echo \"$d\"; break; fi; done); [ -n \"$DEV\" ] && mkfs.ext4 -L config-vol \"$DEV\" || echo 'No unformatted device found'")
 	if out, err := fmtCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to format config volume: %w: %s", err, string(out))
 	}

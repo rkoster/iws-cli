@@ -3,6 +3,7 @@ package incus
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -256,20 +257,21 @@ func (c *Client) Provision(instanceName string) error {
 	if c.Config.ConfigDir != "" {
 		cmd.Env = append(os.Environ(), "INCUS_DIR="+c.Config.ConfigDir)
 	}
+	var stderrBuf bytes.Buffer
 	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
 
 	if err := cmd.Run(); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
-			switch exitErr.ExitCode() {
-			case 4:
+			stderrStr := stderrBuf.String()
+			switch {
+			case exitErr.ExitCode() == 4:
 				// Some units failed to reload (e.g. dbus-broker) but switch succeeded
 				fmt.Println("Warning: nixos-rebuild completed with non-critical unit reload failures")
-			case 255:
+			case exitErr.ExitCode() == 255 || strings.Contains(stderrStr, "websocket"):
 				// Websocket EOF — incus-agent restarted during rebuild
-				// This is expected on first provision; the switch likely succeeded
 				fmt.Println("Connection lost during rebuild (incus-agent restarted). Waiting for agent...")
-				if waitErr := c.WaitForBoot(instanceName, 30, 3*time.Second); waitErr != nil {
+				if waitErr := c.WaitForBoot(instanceName, 60, 3*time.Second); waitErr != nil {
 					return fmt.Errorf("VM did not recover after rebuild: %w", waitErr)
 				}
 				fmt.Println("Provisioning complete (agent reconnected)")
