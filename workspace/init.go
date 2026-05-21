@@ -3,6 +3,9 @@ package workspace
 import (
 	"fmt"
 	"os/exec"
+	"unsafe"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/ruben-koster/iws-cli/incus"
 )
@@ -32,6 +35,19 @@ func (w *Config) DestroyInstance(client *incus.Client, instanceName, remote stri
 	return nil
 }
 
+// getTerminalSize returns the current terminal's rows and columns from the
+// controlling TTY. Falls back to 24x80 if the controlling fd is not a TTY.
+func getTerminalSize() (rows, cols int) {
+	var ws unix.Winsize
+	if fd, err := unix.Open("/dev/tty", unix.O_RDONLY, 0); err == nil {
+		unix.Close(fd)
+		if _, _, err := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), unix.TIOCGWINSZ, uintptr(unsafe.Pointer(&ws))); err == 0 {
+			return int(ws.Row), int(ws.Col)
+		}
+	}
+	return 24, 80
+}
+
 // LaunchGhostty opens the instance in a new Ghostty window
 func (w *Config) LaunchGhostty(instance, remote string) error {
 	targetInstance := instance
@@ -39,16 +55,17 @@ func (w *Config) LaunchGhostty(instance, remote string) error {
 		targetInstance = remote + instance
 	}
 
-	// Build the full command string for Ghostty's --command flag
-	// Use bash -lc to get full NixOS PATH, then su - ruben for user environment
-	// Set TERM=xterm-256color since the VM doesn't have xterm-ghostty terminfo
-	ghosttyCmd := fmt.Sprintf("incus exec -t %s -- bash -lc 'export TERM=xterm-256color; su - ruben -c \"exec tmux new-session -A -s main\"'", targetInstance)
+	// Read the host terminal size so we can pass it to the remote shell.
+	// The incus-agent PTY does not relay the host's window size, causing
+	// tmux to default to 80x24 and leave unused space at the bottom.
+	rows, cols := getTerminalSize()
 
-	// Launch Ghostty with the incus exec command
-	// Use -t (--force-interactive) to allocate a PTY so the incus-agent
-	// can relay terminal size (COLUMNS/LINES) through to tmux/ghostty.
-	// Without a PTY, incus exec runs in non-interactive mode and the
-	// terminal size defaults to 80x24, leaving unused space at the bottom.
+	// Build the full command string for Ghostty's --command flag.
+	// Use bash -lc to get full NixOS PATH, then su - ruben for user environment.
+	// Set TERM=xterm-256color since the VM doesn't have xterm-ghostty terminfo.
+	// Pass COLUMNS and LINES via --env so tmux sees the correct terminal size.
+	ghosttyCmd := fmt.Sprintf("incus exec --env COLUMNS=%d --env LINES=%d -t %s -- bash -lc 'export TERM=xterm-256color; su - ruben -c \"exec tmux new-session -A -s main\"'", cols, rows, targetInstance)
+
 	ghosttyPath := "/Applications/Ghostty.app/Contents/MacOS/ghostty"
 	cmd := exec.Command(ghosttyPath, "--wait-after-command", fmt.Sprintf("--command=%s", ghosttyCmd))
 	cmd.Start()
