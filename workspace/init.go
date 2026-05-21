@@ -2,7 +2,6 @@ package workspace
 
 import (
 	"fmt"
-	"os"
 	"os/exec"
 
 	"github.com/ruben-koster/iws-cli/incus"
@@ -52,9 +51,6 @@ func (w *Config) LaunchGhostty(instance, remote string) error {
 	// terminal size defaults to 80x24, leaving unused space at the bottom.
 	ghosttyPath := "/Applications/Ghostty.app/Contents/MacOS/ghostty"
 	cmd := exec.Command(ghosttyPath, "--wait-after-command", fmt.Sprintf("--command=%s", ghosttyCmd))
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
 	cmd.Start()
 
 	return nil
