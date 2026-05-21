@@ -72,6 +72,9 @@ func (c *Client) IsInstanceRunning(instanceName string) (bool, error) {
 	}
 
 	status := strings.TrimSpace(string(output))
+	if status == "" {
+		return false, fmt.Errorf("instance %s not found", instanceName)
+	}
 	return status == "RUNNING", nil
 }
 
@@ -139,5 +142,57 @@ func (c *Client) CreateVolumeIfNotExists(pool, volumeName string) error {
 	}
 
 	fmt.Printf("Created %s volume on pool '%s'\n", volumeName, pool)
+	return nil
+}
+
+// CreateBlockVolumeIfNotExists creates a block storage volume if it doesn't exist
+func (c *Client) CreateBlockVolumeIfNotExists(pool, volumeName, size string) error {
+	serverRemote := c.GetServerRemote()
+	target := ""
+	if serverRemote != "" {
+		target = serverRemote + ":"
+	}
+
+	// Check if volume exists
+	cmd := exec.Command("incus", "storage", "volume", "show", target+pool, volumeName)
+	if cmd.Run() == nil {
+		return nil // Volume already exists
+	}
+
+	// Create the block volume
+	createCmd := exec.Command("incus", "storage", "volume", "create", target+pool, volumeName, "--type=block", "size="+size)
+	if out, err := createCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to create block volume: %w: %s", err, string(out))
+	}
+
+	fmt.Printf("Created block volume %s (%s) on pool '%s'\n", volumeName, size, pool)
+	return nil
+}
+
+// FormatConfigVolume formats the config block volume with ext4 if not already formatted
+func (c *Client) FormatConfigVolume(instanceName string) error {
+	serverRemote := c.GetServerRemote()
+	if serverRemote == "" {
+		serverRemote = "local"
+	}
+	remoteInstance := serverRemote + ":" + instanceName
+
+	// Check if already formatted by looking for the label
+	// Device names (sda/sdb) are not stable across reboots, so use label detection
+	checkCmd := exec.Command("incus", "exec", remoteInstance, "--",
+		"bash", "-c", "blkid -L config-vol >/dev/null 2>&1")
+	if checkCmd.Run() == nil {
+		return nil // Already formatted
+	}
+
+	// Find the unformatted block device (the one without partitions that isn't the root disk)
+	// The block volume is the device with no partitions and no filesystem
+	fmt.Println("Formatting config volume as ext4...")
+	fmtCmd := exec.Command("incus", "exec", remoteInstance, "--",
+		"bash", "-c", "DEV=$(lsblk -dno NAME,TYPE | awk '$2==\"disk\"{print \"/dev/\"$1}' | while read d; do if ! blkid \"$d\" >/dev/null 2>&1 && [ ! -e \"${d}1\" ]; then echo \"$d\"; break; fi; done); [ -n \"$DEV\" ] && mkfs.ext4 -L config-vol \"$DEV\" || echo 'No unformatted device found'")
+	if out, err := fmtCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to format config volume: %w: %s", err, string(out))
+	}
+
 	return nil
 }
