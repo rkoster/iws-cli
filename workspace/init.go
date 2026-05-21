@@ -2,9 +2,13 @@ package workspace
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
+	"strings"
 
-	"github.com/ruben-koster/iws-cli/incus"
+	"github.com/lxc/incus/v7/shared/termios"
+
+	iwsincus "github.com/ruben-koster/iws-cli/incus"
 )
 
 // Config contains the configuration for workspace initialization
@@ -14,7 +18,7 @@ type Config struct {
 }
 
 // DestroyInstance removes an existing instance
-func (w *Config) DestroyInstance(client *incus.Client, instanceName, remote string) error {
+func (w *Config) DestroyInstance(client *iwsincus.Client, instanceName, remote string) error {
 	// Check if instance exists first
 	_, err := client.IsInstanceRunning(instanceName)
 	if err != nil {
@@ -32,25 +36,47 @@ func (w *Config) DestroyInstance(client *incus.Client, instanceName, remote stri
 	return nil
 }
 
-// LaunchGhostty opens the instance in a new Ghostty window
+// getVMIP reads the VM's IP address from incus list.
+func getVMIP(instanceName string) (string, error) {
+	cmd := exec.Command("incus", "list", instanceName, "-c", "4", "--format", "csv")
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to get VM IP: %w", err)
+	}
+	ip := strings.TrimSpace(string(out))
+	if ip == "" {
+		return "", fmt.Errorf("VM IP address not found")
+	}
+	return ip, nil
+}
+
+// LaunchGhostty opens the instance in a new Ghostty window.
+// Uses `open -na Ghostty.app --args --command=...` to spawn a new
+// Ghostty window running `incus exec -t` with the correct terminal
+// size set via COLUMNS/LINES env vars.
 func (w *Config) LaunchGhostty(instance, remote string) error {
 	targetInstance := instance
 	if remote != "" {
 		targetInstance = remote + instance
 	}
 
-	// Build the full command string for Ghostty's --command flag
-	// Use bash -lc to get full NixOS PATH, then su - ruben for user environment
-	// Set TERM=xterm-256color since the VM doesn't have xterm-ghostty terminfo
-	ghosttyCmd := fmt.Sprintf("incus exec -t %s -- bash -lc 'export TERM=xterm-256color; su - ruben -c \"exec tmux new-session -A -s main\"'", targetInstance)
+	// Read the host terminal dimensions so we can pass them to the
+	// remote shell. The incus-agent PTY does not relay the host's
+	// window size, so we read it here and pass COLUMNS/LINES via env.
+	stdoutFd := int(os.Stdout.Fd())
+	width, height, err := termios.GetSize(stdoutFd)
+	if err != nil {
+		width, height = 80, 24
+	}
 
-	// Launch Ghostty with the incus exec command
-	// Use -t (--force-interactive) to allocate a PTY so the incus-agent
-	// can relay terminal size (COLUMNS/LINES) through to tmux/ghostty.
-	// Without a PTY, incus exec runs in non-interactive mode and the
-	// terminal size defaults to 80x24, leaving unused space at the bottom.
+	// Build the command string for Ghostty.
+	// Use incus exec -t to get a PTY, pass COLUMNS/LINES so tmux
+	// sees the correct terminal size, and start a tmux session.
+	ghosttyCmd := fmt.Sprintf("incus exec -t %s -- bash -lc 'export TERM=xterm-256color; COLUMNS=%d LINES=%d su - ruben -c \"exec tmux new-session -A -s main\"'", targetInstance, width, height)
+
+	// Launch Ghostty in a new window.
 	ghosttyPath := "/Applications/Ghostty.app/Contents/MacOS/ghostty"
-	cmd := exec.Command(ghosttyPath, "--wait-after-command", fmt.Sprintf("--command=%s", ghosttyCmd))
+	cmd := exec.Command(ghosttyPath, "--wait-after-command", "--command="+ghosttyCmd)
 	cmd.Start()
 
 	return nil
