@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 
 	"github.com/ruben-koster/iws-cli/incus"
@@ -42,14 +43,18 @@ func (w *Config) LaunchGhostty(instance, remote string) error {
 	// Build the full command string for Ghostty's --command flag
 	// Use bash -lc to get full NixOS PATH, then su - ruben for user environment
 	// Set TERM=xterm-256color since the VM doesn't have xterm-ghostty terminfo
-	ghosttyCmd := fmt.Sprintf("incus exec %s -- bash -lc 'export TERM=xterm-256color; su - ruben -c \"exec tmux new-session -A -s main\"'", targetInstance)
+	ghosttyCmd := fmt.Sprintf("incus exec -t %s -- bash -lc 'export TERM=xterm-256color; su - ruben -c \"exec tmux new-session -A -s main\"'", targetInstance)
 
 	// Launch Ghostty with the incus exec command
+	// Use -t (--force-interactive) to allocate a PTY so the incus-agent
+	// can relay terminal size (COLUMNS/LINES) through to tmux/ghostty.
+	// Without a PTY, incus exec runs in non-interactive mode and the
+	// terminal size defaults to 80x24, leaving unused space at the bottom.
 	ghosttyPath := "/Applications/Ghostty.app/Contents/MacOS/ghostty"
 	cmd := exec.Command(ghosttyPath, "--wait-after-command", fmt.Sprintf("--command=%s", ghosttyCmd))
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	cmd.Stdin = nil
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 	cmd.Start()
 
 	return nil
