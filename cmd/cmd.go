@@ -33,7 +33,6 @@ func Execute() error {
 
 	serverRemote := client.GetServerRemote()
 	if serverRemote != "" {
-		cfg.ServerRemote = serverRemote
 		cfg.ServerPrefix = serverRemote + ":"
 	} else if runtime.GOOS != "linux" {
 		return fmt.Errorf("no remote Incus server detected. On macOS, a remote server is required.")

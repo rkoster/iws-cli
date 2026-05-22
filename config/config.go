@@ -11,7 +11,6 @@ type Config struct {
 	Update       bool
 	Destroy      bool
 	Help         bool
-	ServerRemote string
 	ServerPrefix string
 	// VM resources
 	CPU          string
@@ -46,8 +45,6 @@ func (c *Config) ParseArguments(args []string) error {
 				switch parts[0] {
 				case "inst":
 					c.InstanceName = parts[1]
-				case "remote":
-					c.ServerRemote = parts[1]
 				case "cpu":
 					c.CPU = parts[1]
 				case "memory":
