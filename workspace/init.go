@@ -33,47 +33,55 @@ func (w *Config) DestroyInstance(client *iwsincus.Client, instanceName, remote s
 	return nil
 }
 
-// getVMIP reads the VM's IP address by querying ip inside the VM.
-// This avoids the ambiguity of incus list which returns all interfaces
-// including Docker bridges and host interfaces.
-func getVMIP(instanceName string) (string, error) {
-	cmd := exec.Command("incus", "exec", instanceName, "--", "ip", "-4", "addr", "show", "dev", "enp5s0")
+// getUsername detects the first user home directory on the VM by running
+// `incus exec <remote>:<instance> -- ls /home` and returning the first
+// directory name found.
+func getUsername(instance, remote string) (string, error) {
+	// Build the instance reference (e.g. "remote:workspace" or "workspace")
+	instanceRef := instance
+	if remote != "" {
+		instanceRef = remote + instance
+	}
+
+	cmd := exec.Command("incus", "exec", instanceRef, "--", "ls", "/home")
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("failed to get VM IP: %w", err)
+		return "", fmt.Errorf("failed to list /home on VM: %w", err)
 	}
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		if strings.Contains(line, "inet ") {
-			parts := strings.Fields(line)
-			for i, p := range parts {
-				if p == "inet" && i+1 < len(parts) {
-					// Strip /CIDR suffix
-					ip := strings.SplitN(parts[i+1], "/", 2)[0]
-					return ip, nil
-				}
-			}
+		if line != "" {
+			return line, nil
 		}
 	}
-	return "", fmt.Errorf("VM IP address not found on enp5s0")
+
+	return "", fmt.Errorf("no user home directory found on VM")
 }
 
-// LaunchGhostty opens the instance in a new Ghostty window via SSH.
-// Reads the VM's IP from incus list and launches `ssh ruben@<ip>` inside
-// a new Ghostty window. SSH handles terminal sizing natively.
+// LaunchGhostty opens the instance in a new Ghostty window via incus exec.
+// It detects the VM username dynamically, then launches Ghostty with
+// `open -na Ghostty.app --args --command='incus exec -t ...'` to start
+// a tmux session.
 func (w *Config) LaunchGhostty(instance, remote string) error {
-	// Get the VM's IP address
-	ip, err := getVMIP(instance)
+	user, err := getUsername(instance, remote)
 	if err != nil {
-		return fmt.Errorf("failed to get VM IP: %w", err)
+		return fmt.Errorf("failed to detect username: %w", err)
 	}
 
-	// Build the SSH command with -t to force TTY allocation
-	sshCmd := fmt.Sprintf("ssh -t ruben@%s", ip)
+	// Build the instance reference (e.g. "remote:workspace" or "workspace")
+	instanceRef := instance
+	if remote != "" {
+		instanceRef = remote + instance
+	}
 
-	// Launch Ghostty in a new window.
-	ghosttyPath := "/Applications/Ghostty.app/Contents/MacOS/ghostty"
-	cmd := exec.Command(ghosttyPath, "--wait-after-command", "--command="+sshCmd)
+	// Build the incus exec command string
+	incusCmd := fmt.Sprintf("incus exec -t --env TERM=xterm-256color %s -- su %s -c \"sleep 1 && tmux new-session -A -s main\"",
+		instanceRef, user)
+
+	// Launch Ghostty via `open`
+	cmd := exec.Command("open", "-na", "Ghostty.app", "--args", "--command="+incusCmd)
 	cmd.Start()
 
 	return nil
