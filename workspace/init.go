@@ -33,18 +33,29 @@ func (w *Config) DestroyInstance(client *iwsincus.Client, instanceName, remote s
 	return nil
 }
 
-// getVMIP reads the VM's IP address from incus list.
+// getVMIP reads the VM's IP address by querying ip inside the VM.
+// This avoids the ambiguity of incus list which returns all interfaces
+// including Docker bridges and host interfaces.
 func getVMIP(instanceName string) (string, error) {
-	cmd := exec.Command("incus", "list", instanceName, "-c", "4", "--format", "csv")
+	cmd := exec.Command("incus", "exec", instanceName, "--", "ip", "-4", "addr", "show", "dev", "enp5s0")
 	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("failed to get VM IP: %w", err)
 	}
-	ip := strings.TrimSpace(string(out))
-	if ip == "" {
-		return "", fmt.Errorf("VM IP address not found")
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.Contains(line, "inet ") {
+			parts := strings.Fields(line)
+			for i, p := range parts {
+				if p == "inet" && i+1 < len(parts) {
+					// Strip /CIDR suffix
+					ip := strings.SplitN(parts[i+1], "/", 2)[0]
+					return ip, nil
+				}
+			}
+		}
 	}
-	return ip, nil
+	return "", fmt.Errorf("VM IP address not found on enp5s0")
 }
 
 // LaunchGhostty opens the instance in a new Ghostty window via SSH.
