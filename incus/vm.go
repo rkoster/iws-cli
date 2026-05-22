@@ -310,25 +310,4 @@ func (c *Client) detectFlakeConfig(remoteInstance string) string {
 	return "workspace"
 }
 
-// GetVMIP returns the VM's IP address on the Incus network.
-func (c *Client) GetVMIP(instanceName string) (string, error) {
-	serverRemote := c.GetServerRemote()
-	if serverRemote == "" {
-		serverRemote = "local"
-	}
-	remoteInstance := serverRemote + ":" + instanceName
 
-	cmd := exec.Command("incus", "list", remoteInstance, "-c", "4", "--format", "csv")
-	if c.Config.ConfigDir != "" {
-		cmd.Env = append(os.Environ(), "INCUS_DIR="+c.Config.ConfigDir)
-	}
-	output, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("failed to get VM IP: %w", err)
-	}
-	ip := strings.TrimSpace(string(output))
-	if ip == "" {
-		return "", fmt.Errorf("VM IP address not found")
-	}
-	return ip, nil
-}
