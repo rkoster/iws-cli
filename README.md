@@ -1,14 +1,13 @@
 # iws-cli
 
-Go CLI tool for managing Incus workspace containers. Replaces the original `iws` bash script with a native Go implementation using the official [Incus Go client](https://github.com/lxc/incus).
+Go CLI tool for managing Incus workspace VMs. Uses the [Incus CLI](https://linuxcontainers.org/incus/) for all operations.
 
 ## Features
 
 - Automatic remote Incus server detection
-- OCI image pulling from GHCR via Incus CLI
-- Instance creation with storage volume attachment using the Incus Go API
-- Config volume symlink initialization (`.config`, `opencode`, `gh`, etc.)
-- Ghostty terminal launch with tmux session management
+- NixOS VM provisioning with persistent storage volumes
+- Config push and nixos-rebuild convergence
+- Ghostty terminal launch with dynamic username detection and tmux session management
 - Works on macOS with remote Incus servers
 
 ## Prerequisites
@@ -28,26 +27,28 @@ go build -o iws-cli .
 
 ```bash
 ./iws-cli                              # Launch workspace (or open existing)
-./iws-cli --update                     # Rebuild workspace from latest image
-./iws-cli image=oci-ghcr:user/img:tag  # Use a custom image
+./iws-cli --update                     # Re-provision with latest config
+./iws-cli --destroy                    # Delete VM (keeps volumes)
 ./iws-cli inst=myworkspace             # Use a custom instance name
-./iws-cli remote=myremote              # Specify a remote server name
+./iws-cli cpu=8 memory=16GiB           # Custom resources
 ```
 
 ### Environment Variables
 
-| Variable   | Default                        | Description              |
-|------------|--------------------------------|--------------------------|
-| `INST`     | `workspace`                    | Instance name            |
-| `IMAGE`    | `oci-ghcr:rkoster/workspace:latest` | OCI image reference |
+| Variable    | Default                        | Description            |
+|-------------|--------------------------------|------------------------|
+| `INST`      | `workspace`                    | Instance name          |
+| `IWS_CPU`   | `4`                            | CPU count              |
+| `IWS_MEMORY`| `8GiB`                         | Memory limit           |
+| `IWS_DISK`  | `50GiB`                        | Root disk size         |
+| `IWS_NIXPKGS`| `~/.config/iws/nixpkgs/`     | NixOS config directory |
 
 ## How It Works
 
 1. **Server detection** — Automatically finds the configured Incus remote server.
-2. **Image pull** — Pulls the OCI image to the Incus server using `incus image copy`.
-3. **Instance creation** — Creates the container with `CreateInstanceFromImage`, attaching config and workspace volumes during creation.
-4. **Config init** — Sets up symlinked config directories and state files from the config volume.
-5. **Ghostty launch** — Opens a new Ghostty window connected to the container via `incus exec`, starting a tmux session.
+2. **VM creation** — Creates a NixOS VM with the specified resources, attaching workspace and config storage volumes.
+3. **Config push** — Pushes the NixOS flake config into the VM and runs `nixos-rebuild switch`.
+4. **Ghostty launch** — Opens a new Ghostty window connected via `incus exec`, dynamically detecting the VM username and starting a tmux session.
 
 ## Architecture
 
@@ -55,8 +56,9 @@ go build -o iws-cli .
 main.go
 ├── cmd/cmd.go          # CLI entry point, argument parsing, orchestration
 ├── config/config.go    # Configuration struct and defaults
-├── incus/client.go     # Incus client using official Go library
-└── workspace/init.go   # Instance lifecycle, config init, Ghostty launch
+├── incus/client.go     # Incus CLI wrapper (start, destroy, detect storage)
+├── incus/vm.go         # VM lifecycle (launch, boot wait, config push, provision)
+└── workspace/init.go   # Instance lifecycle, Ghostty launch
 ```
 
 ## License
