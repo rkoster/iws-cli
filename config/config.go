@@ -10,6 +10,7 @@ type Config struct {
 	InstanceName string
 	Update       bool
 	Destroy      bool
+	Connect      bool
 	Help         bool
 	ServerRemote string
 	ServerPrefix string
@@ -34,6 +35,8 @@ func New() *Config {
 func (c *Config) ParseArguments(args []string) error {
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
+		case "connect":
+			c.Connect = true
 		case "--update":
 			c.Update = true
 		case "--destroy":
