@@ -68,8 +68,8 @@ func (w *Config) LaunchGhostty(instance, remote string) error {
 		return fmt.Errorf("failed to get VM IP: %w", err)
 	}
 
-	// Build the SSH command
-	sshCmd := fmt.Sprintf("ssh ruben@%s", ip)
+	// Build the SSH command with -t to force TTY allocation
+	sshCmd := fmt.Sprintf("ssh -t ruben@%s", ip)
 
 	// Launch Ghostty in a new window.
 	ghosttyPath := "/Applications/Ghostty.app/Contents/MacOS/ghostty"
