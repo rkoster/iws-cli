@@ -76,21 +76,28 @@ func ConnectAndExec(instance, remote string) error {
 	}
 
 	// Prepare the exec request
+	username := os.Getenv("USER")
+	if username == "" {
+		username = "ruben"
+	}
 	req := api.InstanceExecPost{
-		Command:   []string{"bash", "-lc", "export TERM=xterm-256color; exec su - ruben -c 'exec tmux new-session -A -s main'"},
-		WaitForWS: true,
+		Command:     []string{"bash", "-lc", fmt.Sprintf("export TERM=xterm-256color; exec su - %s -c 'exec tmux new-session -A -s main'", username)},
+		WaitForWS:   true,
 		Interactive: true,
 		Environment: map[string]string{"TERM": "xterm-256color"},
 		Width:       width,
 		Height:      height,
 	}
 
+	// Create a stop channel for the control handler goroutine
+	stopCh := make(chan struct{})
+
 	// Prepare exec args with stdin/stdout/stderr and control handler
 	execArgs := &incus.InstanceExecArgs{
 		Stdin:    os.Stdin,
 		Stdout:   os.Stdout,
 		Stderr:   os.Stderr,
-		Control:  controlSocketHandler,
+		Control:  func(conn *websocket.Conn) { controlSocketHandler(conn, stopCh) },
 		DataDone: make(chan bool),
 	}
 
@@ -115,18 +122,31 @@ func ConnectAndExec(instance, remote string) error {
 	// Wait for I/O to flush
 	<-execArgs.DataDone
 
+	// Signal the control handler to stop
+	close(stopCh)
+
 	return nil
 }
 
 // controlSocketHandler handles the control WebSocket connection for terminal
 // resize (SIGWINCH) and signal forwarding. It mirrors the behavior of the
-// incus CLI's exec command.
-func controlSocketHandler(control *websocket.Conn) {
+// incus CLI's exec command. The stop channel is closed when the exec session
+// ends, allowing this goroutine to exit.
+func controlSocketHandler(control *websocket.Conn, stop <-chan struct{}) {
 	if runtime.GOOS == "windows" {
 		// Windows doesn't support SIGWINCH via unix signals
-		// Just consume pings
-		_, _, _ = control.ReadMessage()
-		return
+		// Consume pings until the session ends or connection closes
+		for {
+			_, _, err := control.ReadMessage()
+			if err != nil {
+				return
+			}
+			select {
+			case <-stop:
+				return
+			default:
+			}
+		}
 	}
 
 	ch := make(chan os.Signal, 10)
@@ -149,17 +169,20 @@ func controlSocketHandler(control *websocket.Conn) {
 	defer func() { _ = control.WriteMessage(websocket.CloseMessage, closeMsg) }()
 
 	for {
-		sig := <-ch
+		select {
+		case sig := <-ch:
+			switch sig {
+			case unix.SIGWINCH:
+				// Send window-resize to the incus-agent
+				sendTermSize(control)
 
-		switch sig {
-		case unix.SIGWINCH:
-			// Send window-resize to the incus-agent
-			sendTermSize(control)
-
-		case unix.SIGTERM, unix.SIGHUP, unix.SIGINT, unix.SIGQUIT,
-			unix.SIGABRT, unix.SIGTSTP, unix.SIGTTIN, unix.SIGTTOU,
-			unix.SIGUSR1, unix.SIGUSR2, unix.SIGSEGV, unix.SIGCONT:
-			forwardSignal(control, sig.(unix.Signal))
+			case unix.SIGTERM, unix.SIGHUP, unix.SIGINT, unix.SIGQUIT,
+				unix.SIGABRT, unix.SIGTSTP, unix.SIGTTIN, unix.SIGTTOU,
+				unix.SIGUSR1, unix.SIGUSR2, unix.SIGSEGV, unix.SIGCONT:
+				forwardSignal(control, sig.(unix.Signal))
+			}
+		case <-stop:
+			return
 		}
 	}
 }
