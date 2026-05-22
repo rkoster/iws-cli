@@ -47,24 +47,22 @@ func getVMIP(instanceName string) (string, error) {
 	return ip, nil
 }
 
-// LaunchGhostty opens the instance in a new Ghostty window.
-// Uses `open -na Ghostty.app --args --command=iws connect` which runs
-// the Incus Go client inside Ghostty. The Go client reads the terminal
-// size from Ghostty's fd and relays SIGWINCH via the control WebSocket.
+// LaunchGhostty opens the instance in a new Ghostty window via SSH.
+// Reads the VM's IP from incus list and launches `ssh ruben@<ip>` inside
+// a new Ghostty window. SSH handles terminal sizing natively.
 func (w *Config) LaunchGhostty(instance, remote string) error {
-	targetInstance := instance
-	if remote != "" {
-		targetInstance = remote + instance
+	// Get the VM's IP address
+	ip, err := getVMIP(instance)
+	if err != nil {
+		return fmt.Errorf("failed to get VM IP: %w", err)
 	}
 
-	// Build the command: "iws connect workspace --remote IncusOS"
-	// The 'iws' binary runs inside Ghostty, reads Ghostty's terminal size,
-	// and connects via Incus Go client with control WebSocket resize relay.
-	ghosttyCmd := fmt.Sprintf("iws connect %s --remote '%s'", targetInstance, remote)
+	// Build the SSH command
+	sshCmd := fmt.Sprintf("ssh ruben@%s", ip)
 
 	// Launch Ghostty in a new window.
 	ghosttyPath := "/Applications/Ghostty.app/Contents/MacOS/ghostty"
-	cmd := exec.Command(ghosttyPath, "--wait-after-command", "--command="+ghosttyCmd)
+	cmd := exec.Command(ghosttyPath, "--wait-after-command", "--command="+sshCmd)
 	cmd.Start()
 
 	return nil

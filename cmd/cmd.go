@@ -25,11 +25,6 @@ func Execute() error {
 		return nil
 	}
 
-	// Handle "iws connect" subcommand — runs inside Ghostty, no VM lifecycle
-	if cfg.Connect {
-		return handleConnect(cfg.InstanceName, cfg.ServerRemote)
-	}
-
 	// Initialize Incus client
 	client, err := incus.New()
 	if err != nil {
@@ -126,12 +121,8 @@ func Execute() error {
 
 func printHelp() {
 	fmt.Fprintf(os.Stderr, `Usage: iws [OPTIONS]
-Usage: iws connect [OPTIONS]
 
 Launch a NixOS VM workspace and connect via Ghostty.
-
-Commands:
-  connect     Connect to an existing workspace VM (run inside Ghostty)
 
 Options:
   --update          Push config and run nixos-rebuild switch
@@ -143,7 +134,6 @@ Configuration:
   cpu=N             CPU count (default: 4, env: IWS_CPU)
   memory=SIZE       Memory limit (default: 8GiB, env: IWS_MEMORY)
   disk=SIZE         Root disk size (default: 50GiB, env: IWS_DISK)
-  remote=URL        Incus server URL (default from ~/.config/incus/)
 
 Config directory: ~/.config/iws/nixpkgs/ (env: IWS_NIXPKGS)
 
@@ -151,7 +141,6 @@ Examples:
   iws                       # Launch or connect to workspace VM
   iws --update              # Re-provision with latest config
   iws --destroy             # Delete VM (keeps volumes)
-  iws connect workspace     # Connect to existing VM (from inside Ghostty)
   iws cpu=8 memory=16GiB    # Custom resources
 `)
 }
