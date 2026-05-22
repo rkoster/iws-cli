@@ -25,6 +25,11 @@ func Execute() error {
 		return nil
 	}
 
+	// Handle "iws connect" subcommand — runs inside Ghostty, no VM lifecycle
+	if cfg.Connect {
+		return handleConnect(cfg.InstanceName, cfg.ServerRemote)
+	}
+
 	// Initialize Incus client
 	client, err := incus.New()
 	if err != nil {
