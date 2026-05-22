@@ -33,24 +33,26 @@ func (w *Config) DestroyInstance(client *iwsincus.Client, instanceName, remote s
 	return nil
 }
 
+// instanceRef builds the full instance reference for incus commands,
+// prepending the remote prefix when provided (e.g. "remote:workspace").
+func instanceRef(instance, remote string) string {
+	if remote != "" {
+		return remote + instance
+	}
+	return instance
+}
+
 // getUsername detects the first user home directory on the VM by running
 // `incus exec <remote>:<instance> -- ls /home` and returning the first
 // directory name found.
 func getUsername(instance, remote string) (string, error) {
-	// Build the instance reference (e.g. "remote:workspace" or "workspace")
-	instanceRef := instance
-	if remote != "" {
-		instanceRef = remote + instance
-	}
-
-	cmd := exec.Command("incus", "exec", instanceRef, "--", "ls", "/home")
+	cmd := exec.Command("incus", "exec", instanceRef(instance, remote), "--", "ls", "/home")
 	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("failed to list /home on VM: %w", err)
 	}
 
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-	for _, line := range lines {
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		line = strings.TrimSpace(line)
 		if line != "" {
 			return line, nil
@@ -70,19 +72,15 @@ func (w *Config) LaunchGhostty(instance, remote string) error {
 		return fmt.Errorf("failed to detect username: %w", err)
 	}
 
-	// Build the instance reference (e.g. "remote:workspace" or "workspace")
-	instanceRef := instance
-	if remote != "" {
-		instanceRef = remote + instance
-	}
-
 	// Build the incus exec command string
 	incusCmd := fmt.Sprintf("incus exec -t --env TERM=xterm-256color %s -- su %s -c \"sleep 1 && tmux new-session -A -s main\"",
-		instanceRef, user)
+		instanceRef(instance, remote), user)
 
 	// Launch Ghostty via `open`
 	cmd := exec.Command("open", "-na", "Ghostty.app", "--args", "--command="+incusCmd)
-	cmd.Start()
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to launch Ghostty: %w", err)
+	}
 
 	return nil
 }
