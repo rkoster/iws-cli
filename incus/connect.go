@@ -31,14 +31,10 @@ func ConnectAndExec(instance, remote string) error {
 	// Strip trailing colon if present (e.g. "IncusOS:" -> "IncusOS")
 	cleanRemote := strings.TrimSuffix(remote, ":")
 	if cleanRemote != "" {
-		// Check if remote looks like a remote name (exists in config) or an address
-		for name := range cfg.Remotes {
-			if name == cleanRemote {
-				remoteName = cleanRemote
-				break
-			}
-		}
-		if remoteName == "" {
+		// Check if remote looks like a remote name (exists in config)
+		if _, ok := cfg.Remotes[cleanRemote]; ok {
+			remoteName = cleanRemote
+		} else {
 			// Treat as a server address — resolve to the matching remote
 			for name, r := range cfg.Remotes {
 				if r.Protocol == "incus" && r.Static {
@@ -52,9 +48,9 @@ func ConnectAndExec(instance, remote string) error {
 	}
 
 	if remoteName == "" {
-		// Fall back to finding any static remote
+		// Fall back to finding any Incus remote (not just static)
 		for name, r := range cfg.Remotes {
-			if r.Protocol == "incus" && r.Static {
+			if r.Protocol == "incus" && name != "local" {
 				remoteName = name
 				break
 			}
@@ -79,12 +75,8 @@ func ConnectAndExec(instance, remote string) error {
 	}
 
 	// Prepare the exec request
-	username := os.Getenv("USER")
-	if username == "" {
-		username = "ruben"
-	}
 	req := api.InstanceExecPost{
-		Command:     []string{"bash", "-lc", fmt.Sprintf("export TERM=xterm-256color; exec su - %s -c 'exec tmux new-session -A -s main'", username)},
+		Command:     []string{"bash", "-lc", "export TERM=xterm-256color; exec su - ruben -c 'exec tmux new-session -A -s main'"},
 		WaitForWS:   true,
 		Interactive: true,
 		Environment: map[string]string{"TERM": "xterm-256color"},
