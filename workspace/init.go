@@ -2,11 +2,8 @@ package workspace
 
 import (
 	"fmt"
-	"os"
 	"os/exec"
 	"strings"
-
-	"github.com/lxc/incus/v7/shared/termios"
 
 	iwsincus "github.com/ruben-koster/iws-cli/incus"
 )
@@ -51,28 +48,19 @@ func getVMIP(instanceName string) (string, error) {
 }
 
 // LaunchGhostty opens the instance in a new Ghostty window.
-// Uses `open -na Ghostty.app --args --command=...` to spawn a new
-// Ghostty window running `incus exec -t` with the correct terminal
-// size set via COLUMNS/LINES env vars.
+// Uses `open -na Ghostty.app --args --command=iws connect` which runs
+// the Incus Go client inside Ghostty. The Go client reads the terminal
+// size from Ghostty's fd and relays SIGWINCH via the control WebSocket.
 func (w *Config) LaunchGhostty(instance, remote string) error {
 	targetInstance := instance
 	if remote != "" {
 		targetInstance = remote + instance
 	}
 
-	// Read the host terminal dimensions so we can pass them to the
-	// remote shell. The incus-agent PTY does not relay the host's
-	// window size, so we read it here and pass COLUMNS/LINES via env.
-	stdoutFd := int(os.Stdout.Fd())
-	width, height, err := termios.GetSize(stdoutFd)
-	if err != nil {
-		width, height = 80, 24
-	}
-
-	// Build the command string for Ghostty.
-	// Use incus exec -t to get a PTY, pass COLUMNS/LINES so tmux
-	// sees the correct terminal size, and start a tmux session.
-	ghosttyCmd := fmt.Sprintf("incus exec -t %s -- bash -lc 'export TERM=xterm-256color; COLUMNS=%d LINES=%d su - ruben -c \"exec tmux new-session -A -s main\"'", targetInstance, width, height)
+	// Build the command: "iws connect workspace --remote IncusOS"
+	// The 'iws' binary runs inside Ghostty, reads Ghostty's terminal size,
+	// and connects via Incus Go client with control WebSocket resize relay.
+	ghosttyCmd := fmt.Sprintf("iws connect %s --remote '%s'", targetInstance, remote)
 
 	// Launch Ghostty in a new window.
 	ghosttyPath := "/Applications/Ghostty.app/Contents/MacOS/ghostty"
