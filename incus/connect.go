@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"strings"
 
 	"github.com/gorilla/websocket"
 	incus "github.com/lxc/incus/v7/client"
@@ -27,11 +28,13 @@ func ConnectAndExec(instance, remote string) error {
 
 	// Determine the remote name
 	var remoteName string
-	if remote != "" {
+	// Strip trailing colon if present (e.g. "IncusOS:" -> "IncusOS")
+	cleanRemote := strings.TrimSuffix(remote, ":")
+	if cleanRemote != "" {
 		// Check if remote looks like a remote name (exists in config) or an address
 		for name := range cfg.Remotes {
-			if name == remote {
-				remoteName = remote
+			if name == cleanRemote {
+				remoteName = cleanRemote
 				break
 			}
 		}
@@ -39,7 +42,7 @@ func ConnectAndExec(instance, remote string) error {
 			// Treat as a server address — resolve to the matching remote
 			for name, r := range cfg.Remotes {
 				if r.Protocol == "incus" && r.Static {
-					if r.Addr == remote {
+					if r.Addr == cleanRemote {
 						remoteName = name
 						break
 					}
