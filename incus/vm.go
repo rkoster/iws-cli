@@ -111,6 +111,39 @@ func (c *Client) EnsureVolumes(instanceName, pool string) error {
 		}
 	}
 
+	// cpu-temp: share only the host's AMD k10temp hwmon directory, read-only.
+	// The workspace VM talks to IncusOS remotely, so this source is on the Incus
+	// host, not in the VM where iws itself runs. The PCI address identifies the
+	// CPU sensor; hwmon1 is its current k10temp sysfs directory.
+	hwmonPath := "/sys/devices/pci0000:00/0000:00:18.3/hwmon/hwmon1"
+	addTemperatureCmd := exec.Command("incus", "config", "device", "add", remoteInstance,
+		"cpu-temp", "disk",
+		"source="+hwmonPath,
+		"path=/mnt/host-cpu-temp",
+		"readonly=true",
+		"io.bus=virtiofs",
+	)
+	if out, err := addTemperatureCmd.CombinedOutput(); err != nil {
+		if !strings.Contains(string(out), "already exists") {
+			return fmt.Errorf("failed to attach host CPU temperature sensor: %w: %s", err, string(out))
+		}
+		// Refresh an existing sensor device in case hwmon numbering changed.
+		removeTemperatureCmd := exec.Command("incus", "config", "device", "remove", remoteInstance, "cpu-temp")
+		if out, err := removeTemperatureCmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to refresh existing CPU temperature device: %w: %s", err, string(out))
+		}
+		addTemperatureCmd = exec.Command("incus", "config", "device", "add", remoteInstance,
+			"cpu-temp", "disk",
+			"source="+hwmonPath,
+			"path=/mnt/host-cpu-temp",
+			"readonly=true",
+			"io.bus=virtiofs",
+		)
+		if out, err := addTemperatureCmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to refresh host CPU temperature sensor: %w: %s", err, string(out))
+		}
+	}
+
 	// Format the block volume if needed (after VM boot, handled by FormatConfigVolume)
 
 	return nil
@@ -309,5 +342,3 @@ func (c *Client) detectFlakeConfig(remoteInstance string) string {
 	}
 	return "workspace"
 }
-
-
