@@ -144,6 +144,47 @@ func (c *Client) EnsureVolumes(instanceName, pool string) error {
 		}
 	}
 
+	// Additional host sensors are mounted individually and read-only.
+	// These PCI/I2C paths are for this host's NVMe, NIC and DIMM sensors.
+	hostSensors := []struct {
+		name   string
+		source string
+		path   string
+	}{
+		{"nvme-temp", "/sys/devices/pci0000:00/0000:00:03.7/0000:03:00.0/nvme/nvme0/hwmon0", "/mnt/host-nvme-temp"},
+		{"network-temp", "/sys/devices/pci0000:00/0000:00:03.4/0000:02:00.0/mdio_bus/r8169-0-200/r8169-0-200:00/hwmon/hwmon2", "/mnt/host-network-temp"},
+		{"memory-temp-1", "/sys/devices/pci0000:00/0000:00:14.0/i2c-0/0-0051/hwmon/hwmon3", "/mnt/host-memory-temp-1"},
+		{"memory-temp-2", "/sys/devices/pci0000:00/0000:00:14.0/i2c-0/0-0053/hwmon/hwmon4", "/mnt/host-memory-temp-2"},
+	}
+	for _, sensor := range hostSensors {
+		addSensorCmd := exec.Command("incus", "config", "device", "add", remoteInstance,
+			sensor.name, "disk",
+			"source="+sensor.source,
+			"path="+sensor.path,
+			"readonly=true",
+			"io.bus=virtiofs",
+		)
+		if out, err := addSensorCmd.CombinedOutput(); err != nil {
+			if !strings.Contains(string(out), "already exists") {
+				return fmt.Errorf("failed to attach host sensor %s: %w: %s", sensor.name, err, string(out))
+			}
+			removeSensorCmd := exec.Command("incus", "config", "device", "remove", remoteInstance, sensor.name)
+			if out, err := removeSensorCmd.CombinedOutput(); err != nil {
+				return fmt.Errorf("failed to refresh host sensor %s: %w: %s", sensor.name, err, string(out))
+			}
+			addSensorCmd = exec.Command("incus", "config", "device", "add", remoteInstance,
+				sensor.name, "disk",
+				"source="+sensor.source,
+				"path="+sensor.path,
+				"readonly=true",
+				"io.bus=virtiofs",
+			)
+			if out, err := addSensorCmd.CombinedOutput(); err != nil {
+				return fmt.Errorf("failed to reattach host sensor %s: %w: %s", sensor.name, err, string(out))
+			}
+		}
+	}
+
 	// Format the block volume if needed (after VM boot, handled by FormatConfigVolume)
 
 	return nil
